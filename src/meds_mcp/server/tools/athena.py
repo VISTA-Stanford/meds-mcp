@@ -494,27 +494,23 @@ class AthenaOntology:
             "vocabulary": code.split("/")[0],
         }
 
-    def get_node_descriptions(self, G: nx.DiGraph) -> Dict[str, str]:
+    def get_graph_metadata(self, G: nx.DiGraph) -> Dict[str, Dict[str, Any]]:
         """
-        Create a dictionary mapping node codes to their descriptions from a graph.
+        Get metadata for all nodes in a graph.
+
+        TODO: Add relationship metadata to edges 
         
         Args:
             G: NetworkX DiGraph containing the ontology subgraph
             
         Returns:
-            Dictionary mapping node codes to their descriptions
+            Dictionary mapping node codes to their metadata dictionaries
         """
-        node_descriptions = {}
-        
-        for node in G.nodes():
-            # Get the description from the graph node attributes or fall back to ontology
-            description = G.nodes[node].get('description', '')
-            if not description:
-                description = self.description_map.get(node, '')
+        return {
+            node: self.get_code_metadata(node)
+            for node in G.nodes()
+        }
             
-            node_descriptions[node] = description
-            
-        return node_descriptions
 
 
 if __name__ == "__main__":
@@ -523,22 +519,24 @@ if __name__ == "__main__":
     print("Total concepts:", len(ontology))
 
     # Test with RxNorm code
-    rxnorm_code = "SNOMED/363358000"  
-    descendants = ontology.get_descendant_subgraph(rxnorm_code, vocabularies=["SNOMED"])
+    code = "SNOMED/363358000"  
+    descendants = ontology.get_descendant_subgraph(code, vocabularies=["SNOMED"])
     print(f"Descendant subgraph nodes: {len(descendants.nodes())}")
     print(f"Descendant subgraph edges: {len(descendants.edges())}")
     
     # Test metadata
-    metadata = ontology.get_code_metadata(rxnorm_code)
+    metadata = ontology.get_code_metadata(code)
     print(f"RxNorm code metadata: {metadata}")
     
     # Test the helper function
-    print("\n=== Testing get_node_descriptions helper ===")
-    node_descriptions = ontology.get_node_descriptions(descendants)
-    print(f"Number of nodes with descriptions: {len(node_descriptions)}")
+    print("\n=== Testing get_graph_nodes_metadata helper ===")
+    nodes_metadata = ontology.get_graph_nodes_metadata(descendants)
+    print(f"Number of nodes with metadata: {len(nodes_metadata)}")
     
     # Show a few examples
-    print("Sample node descriptions:")
-    for i, (code, description) in enumerate(list(node_descriptions.items())):
-        print(f"  {code}: {description}")
+    print("Sample node metadata:")
+    for i, (code, metadata) in enumerate(list(nodes_metadata.items())[:3]):
+        print(f"  {code}: {metadata}")
+        if i >= 2:  # Show only first 3
+            break
         

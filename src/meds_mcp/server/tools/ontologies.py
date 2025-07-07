@@ -6,7 +6,7 @@ Tools for querying ontologies.
 import os
 import mcp
 from dotenv import load_dotenv
-from meds2text.ontology.athena import AthenaOntology  # type: ignore
+from meds_mcp.server.tools.athena import AthenaOntology 
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("tools")
@@ -39,106 +39,25 @@ def get_ancestor_subgraph(code: str, vocabularies: list[str] = None) -> dict:
         vocabularies: List of allowed vocabularies (e.g., ['RxNorm', 'ATC']). 
                      Use '*' to allow all vocabularies. Default is None (all vocabularies).
     """
-    # Handle vocabulary filtering
-    if vocabularies is None or '*' in vocabularies:
-        # No filtering - get full subgraph
-        G = _ontology.get_subgraph_to_roots(code)
-    else:
-        # Filter by vocabularies
-        G = _get_filtered_subgraph(code, vocabularies)
-    
-    # Print all node names and their text descriptions
-    print(f"\n=== Subgraph for code: {code} ===")
-    if vocabularies and '*' not in vocabularies:
-        print(f"Filtered to vocabularies: {vocabularies}")
-    print("Nodes and their descriptions:")
-    for node in G.nodes():
-        description = _ontology.get_description(node)
-        print(f"  {node}: {description}")
-    print("=" * 50)
-    
-    # Convert DiGraph to dictionary format for return
-    return {
-        "nodes": list(G.nodes()),
-        "edges": list(G.edges())
-    }
+    G = _ontology.get_ancestor_subgraph(code, vocabularies)
+    return _ontology.get_graph_metadata(G)
 
-
-def _get_filtered_subgraph(code: str, allowed_vocabularies: list[str]):
-    """
-    Get a filtered subgraph that only includes nodes from allowed vocabularies.
-    
-    Args:
-        code: Starting code
-        allowed_vocabularies: List of vocabulary prefixes to allow
-        
-    Returns:
-        NetworkX DiGraph containing only nodes from allowed vocabularies
-    """
-    import networkx as nx
-    
-    # Create a new directed graph
-    G = nx.DiGraph()
-    
-    def is_allowed_node(node: str) -> bool:
-        """Check if a node belongs to an allowed vocabulary."""
-        for vocab in allowed_vocabularies:
-            if node.startswith(f"{vocab}/"):
-                return True
-        return False
-    
-    def add_filtered_paths(current_code: str, visited: set):
-        """Recursively add paths that only go through allowed vocabularies."""
-        if current_code in visited:
-            return
-        
-        visited.add(current_code)
-        
-        # Add the current node if it's allowed
-        if is_allowed_node(current_code):
-            G.add_node(current_code)
-            
-            # Get parents and filter them
-            parents = _ontology.get_parents(current_code)
-            for parent in parents:
-                if is_allowed_node(parent):
-                    G.add_edge(current_code, parent)
-                    add_filtered_paths(parent, visited)
-                else:
-                    # If parent is not allowed, try to find allowed ancestors
-                    add_filtered_paths(parent, visited)
-        else:
-            # Current node is not allowed, but we still need to explore its parents
-            parents = _ontology.get_parents(current_code)
-            for parent in parents:
-                add_filtered_paths(parent, visited)
-    
-    # Start the recursive exploration
-    add_filtered_paths(code, set())
-    
-    return G
-    
 
 @mcp.tool()
-def get_descendant_subgraph(code: str) -> dict:
+def get_descendant_subgraph(code: str, vocabularies: list[str] = None) -> dict:
     """
     Get the descendant subgraph of a code.
     """
-    return None #_ontology.get_descendant_subgraph(code)
-
+    G = _ontology.get_descendant_subgraph(code, vocabularies)
+    return _ontology.get_graph_metadata(G)
 
 if __name__ == "__main__":
+    code = "SNOMED/363358000"
+    vocabularies = [code.split("/")[0]]
     print("=== Testing full subgraph (all vocabularies) ===")
-    print(get_ancestor_subgraph("RxNorm/308189"))
+    print("ancestor", len(get_ancestor_subgraph(code)))
+    print("descendant", len(get_descendant_subgraph(code)))
+    print("=== Testing filtered subgraph (SNOMED only) ===")
+    print("ancestor", len(get_ancestor_subgraph(code, vocabularies=vocabularies)))
+    print("descendant", len(get_descendant_subgraph(code, vocabularies=vocabularies)))
     
-    print("\n=== Testing filtered subgraph (RxNorm only) ===")
-    print(get_ancestor_subgraph("RxNorm/308189", vocabularies=["RxNorm"]))
-    
-    print("\n=== Testing filtered subgraph (ATC only) ===")
-    print(get_ancestor_subgraph("RxNorm/308189", vocabularies=["ATC"]))
-    
-    print("\n=== Testing filtered subgraph (RxNorm and ATC) ===")
-    print(get_ancestor_subgraph("RxNorm/308189", vocabularies=["RxNorm", "ATC"]))
-    
-    print("\n=== Testing wildcard (all vocabularies) ===")
-    print(get_ancestor_subgraph("RxNorm/308189", vocabularies=["*"]))
