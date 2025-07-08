@@ -1,44 +1,22 @@
-# Add lifespan support for startup/shutdown with strong typing
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
-
-from fake_database import Database  # Replace with your actual DB type
-
+import os
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+from meds_mcp.server.rag.simple_storage import initialize_document_store
 
-# Create a named server
-mcp = FastMCP("My App")
+# Initialize document store with cache and data directories
+doc_store = initialize_document_store(
+    cache_dir="data/scratch/cache",
+    data_dir="data/collections/dev-corpus"
+)
 
-# Specify dependencies for deployment and development
-mcp = FastMCP("My App", dependencies=["pandas", "numpy"])
+# Import the unified tools module - this will register all tools with the FastMCP instance
+import meds_mcp.server.tools
 
+# Get the FastMCP instance from the tools module
+mcp = meds_mcp.server.tools.mcp
 
-@dataclass
-class AppContext:
-    db: Database
-
-
-@asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    """Manage application lifecycle with type-safe context"""
-    # Initialize on startup
-    db = await Database.connect()
-    try:
-        yield AppContext(db=db)
-    finally:
-        # Cleanup on shutdown
-        await db.disconnect()
-
-
-# Pass lifespan to server
-mcp = FastMCP("My App", lifespan=app_lifespan)
-
-
-# Access type-safe lifespan context in tools
-@mcp.tool()
-def query_db() -> str:
-    """Tool that uses initialized resources"""
-    ctx = mcp.get_context()
-    db = ctx.request_context.lifespan_context["db"]
-    return db.query()
+if __name__ == "__main__":
+    import uvicorn
+    # Get the StreamableHTTP app from FastMCP
+    app = mcp.streamable_http_app()
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
