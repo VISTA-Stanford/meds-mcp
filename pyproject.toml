@@ -1,68 +1,73 @@
 [build-system]
-requires = ["hatchling"]
 build-backend = "hatchling.build"
+requires = ["hatchling"]
 
 [project]
-name = "meds-mcp"
-version = "0.1.0"
+authors = [
+  {name = "Jason Alan Fries", email = "jfries@stanford.edu"},
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Healthcare Industry",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 description = "MEDS (medical event data standard) MCP server with fast querying capabilities"
+keywords = ["medical", "ontology", "mcp", "healthcare", "terminology"]
+license = {text = "MIT"}
+name = "meds-mcp"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
-authors = [
-    {name = "Jason Alan Fries", email = "jfries@stanford.edu"},
-]
-keywords = ["medical", "ontology", "mcp", "healthcare", "terminology"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Healthcare Industry",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: Medical Science Apps.",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-]
+version = "0.1.0"
 
 dependencies = [
-    "mcp>=1.0.0",
-    "numpy>=1.24.0",
-    "polars>=0.20.0",
-    "pyarrow>=12.0.0",
-    "networkx>=3.0",
-    "python-dotenv>=1.0.0",
+  "mcp>=1.0.0",
+  "numpy>=1.24.0",
+  "polars>=0.20.0",
+  "pyarrow>=12.0.0",
+  "networkx>=3.0",
+  "python-dotenv>=1.0.0",
+  "pymongo>=4.5.0",
+  "llama-index>=0.9.0",
+  "llama-index-storage-docstore-mongodb>=0.1.0",
+  "llama-index-storage-index-store-mongodb>=0.1.0",
+  "llama-index-llms-openai>=0.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-    "mypy>=1.0.0",
-    "ruff>=0.1.0",
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "black>=23.0.0",
+  "isort>=5.12.0",
+  "mypy>=1.0.0",
+  "ruff>=0.1.0",
 ]
 
 test = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.0.0",
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "pytest-cov>=4.0.0",
 ]
 
 docs = [
-    "sphinx>=6.0.0",
-    "sphinx-rtd-theme>=1.3.0",
-    "myst-parser>=1.0.0",
+  "sphinx>=6.0.0",
+  "sphinx-rtd-theme>=1.3.0",
+  "myst-parser>=1.0.0",
 ]
 
 [project.urls]
+"Bug Tracker" = "https://github.com/yourusername/meds-mcp/issues"
+Documentation = "https://meds-mcp.readthedocs.io"
 Homepage = "https://github.com/yourusername/meds-mcp"
 Repository = "https://github.com/yourusername/meds-mcp"
-Documentation = "https://meds-mcp.readthedocs.io"
-"Bug Tracker" = "https://github.com/yourusername/meds-mcp/issues"
 
 [project.scripts]
 meds-mcp = "meds_mcp.server.main:main"
@@ -71,9 +76,6 @@ meds-mcp = "meds_mcp.server.main:main"
 packages = ["src/meds_mcp"]
 
 [tool.black]
-line-length = 88
-target-version = ['py39']
-include = '\.pyi?$'
 extend-exclude = '''
 /(
   # directories
@@ -87,88 +89,91 @@ extend-exclude = '''
   | dist
 )/
 '''
+include = '\.pyi?$'
+line-length = 88
+target-version = ['py39']
 
 [tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
 known_first_party = ["meds_mcp"]
+line_length = 88
+multi_line_output = 3
+profile = "black"
 
 [tool.mypy]
-python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
 check_untyped_defs = true
+disallow_incomplete_defs = true
 disallow_untyped_decorators = true
+disallow_untyped_defs = true
 no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
+python_version = "3.9"
 strict_equality = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = [
-    "polars.*",
-    "pyarrow.*",
-    "networkx.*",
-]
 ignore_missing_imports = true
+module = [
+  "polars.*",
+  "pyarrow.*",
+  "networkx.*",
+]
 
 [tool.pytest.ini_options]
-minversion = "7.0"
 addopts = "-ra -q --strict-markers --strict-config"
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
+  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "integration: marks tests as integration tests",
+  "unit: marks tests as unit tests",
 ]
+minversion = "7.0"
+python_classes = ["Test*"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["src"]
 omit = [
-    "*/tests/*",
-    "*/test_*",
-    "*/__pycache__/*",
+  "*/tests/*",
+  "*/test_*",
+  "*/__pycache__/*",
 ]
+source = ["src"]
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if 0:",
-    "if __name__ == .__main__.:",
-    "class .*\\bProtocol\\):",
-    "@(abc\\.)?abstractmethod",
+  "pragma: no cover",
+  "def __repr__",
+  "if self.debug:",
+  "if settings.DEBUG",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if 0:",
+  "if __name__ == .__main__.:",
+  "class .*\\bProtocol\\):",
+  "@(abc\\.)?abstractmethod",
 ]
 
 [tool.ruff]
-target-version = "py39"
+ignore = [
+  "E501", # line too long, handled by black
+  "B008", # do not perform function calls in argument defaults
+  "C901", # too complex
+]
 line-length = 88
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
+  "E", # pycodestyle errors
+  "W", # pycodestyle warnings
+  "F", # pyflakes
+  "I", # isort
+  "B", # flake8-bugbear
+  "C4", # flake8-comprehensions
+  "UP", # pyupgrade
 ]
-ignore = [
-    "E501",  # line too long, handled by black
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
-]
+target-version = "py39"
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
