@@ -14,14 +14,20 @@ from mcp.server.fastmcp import FastMCP
 # Global MCP instance
 mcp = FastMCP("search")
 
-# Global document store reference
-_document_store = None
+# Import the module to access the global document store
+import meds_mcp.server.rag.simple_storage as storage_module
 
 
 def set_document_store(store):
-    """Set the global document store for search tools."""
-    global _document_store
-    _document_store = store
+    """Set the global document store for search tools (for backward compatibility)."""
+    # This function is kept for backward compatibility but not needed anymore
+    # since we access _document_store through the module
+    pass
+
+
+def get_document_store():
+    """Get the current document store from the storage module."""
+    return storage_module._document_store
 
 
 def parse_timestamp_from_metadata(timestamp_value) -> Optional[datetime.datetime]:
@@ -443,7 +449,8 @@ async def search_patient_events(
     Returns:
         List of search results with event data
     """
-    if _document_store is None:
+    document_store = get_document_store()
+    if document_store is None:
         raise ValueError("Document store not initialized. Call set_document_store() first.")
     
     # Parse filters dict into SearchFilters object
@@ -476,7 +483,7 @@ async def search_patient_events(
         )
     
     # Create retriever and search
-    retriever = PatientTimelineRetriever(_document_store)
+    retriever = PatientTimelineRetriever(document_store)
     return retriever.search(query, person_id, search_filters)
 
 
@@ -497,7 +504,8 @@ async def get_events_by_type(
     Returns:
         List of events of the specified type
     """
-    if _document_store is None:
+    document_store = get_document_store()
+    if document_store is None:
         raise ValueError("Document store not initialized. Call set_document_store() first.")
     
     # Parse filters dict into SearchFilters object
@@ -530,7 +538,7 @@ async def get_events_by_type(
         )
     
     # Create retriever and get events
-    retriever = PatientTimelineRetriever(_document_store)
+    retriever = PatientTimelineRetriever(document_store)
     return retriever.get_events_by_type(event_type, person_id, search_filters)
 
 
@@ -551,7 +559,8 @@ async def get_historical_values(
     Returns:
         List of observations with timestamps, sorted chronologically
     """
-    if _document_store is None:
+    document_store = get_document_store()
+    if document_store is None:
         raise ValueError("Document store not initialized. Call set_document_store() first.")
     
     # Parse filters dict into SearchFilters object
@@ -583,7 +592,7 @@ async def get_historical_values(
         )
     
     # Create retriever and get historical values
-    retriever = PatientTimelineRetriever(_document_store)
+    retriever = PatientTimelineRetriever(document_store)
     return retriever.get_historical_values(attribute_filters, person_id, search_filters)
 
 

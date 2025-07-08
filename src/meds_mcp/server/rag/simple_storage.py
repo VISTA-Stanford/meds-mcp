@@ -12,7 +12,7 @@ from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.retrievers.bm25 import BM25Retriever
 import pandas as pd
 
-mcp = FastMCP("demo")
+
 
 @dataclass
 class PatientDocument:
@@ -195,6 +195,29 @@ class XMLDocumentStore:
         
         return None
     
+    def load_patient_timeline(self, person_id: str, data_dir: str, chunk_element: str = "event") -> str:
+        """
+        Load a patient timeline by person_id from a data directory.
+        
+        Args:
+            person_id: Patient identifier (filename without extension)
+            data_dir: Directory containing patient XML files
+            chunk_element: XML element to chunk on (default: "event")
+            
+        Returns:
+            Person ID of the loaded document
+        """
+        data_path = Path(data_dir)
+        if not data_path.exists():
+            raise FileNotFoundError(f"Data directory not found: {data_dir}")
+        
+        # Look for XML file with person_id as filename
+        xml_file = data_path / f"{person_id}.xml"
+        if not xml_file.exists():
+            raise FileNotFoundError(f"Patient XML file not found: {xml_file}")
+        
+        return self.load_patient_document(str(xml_file), chunk_element)
+    
 
     
     def list_patients(self) -> List[Dict[str, Any]]:
@@ -269,15 +292,17 @@ class XMLDocumentStore:
             for node in patient.nodes
         ]
 
+mcp = FastMCP("demo")
 
-# Global document store instance
+# Global variables
 _document_store: Optional[XMLDocumentStore] = None
+_data_dir: Optional[str] = None
 
-
-def initialize_document_store(cache_dir: str = "cache"):
+def initialize_document_store(cache_dir: str = "cache", data_dir: str = None):
     """Initialize the global document store."""
-    global _document_store
+    global _document_store, _data_dir
     _document_store = XMLDocumentStore(cache_dir)
+    _data_dir = data_dir
 
 
 @mcp.resource("docstore://{person_id}/events/{node_id}")
@@ -343,6 +368,27 @@ async def load_patient_xml(filepath: str, chunk_element: str = "event") -> str:
         raise RuntimeError("Document store not initialized")
     
     return _document_store.load_patient_document(filepath, chunk_element)
+
+
+@mcp.tool()
+async def load_patient_timeline(person_id: str, chunk_element: str = "event") -> str:
+    """
+    Load a patient timeline by person_id from the configured data directory.
+    
+    Args:
+        person_id: Patient identifier (filename without extension)
+        chunk_element: XML element to chunk on (default: "event")
+        
+    Returns:
+        Person ID of the loaded document
+    """
+    if _document_store is None:
+        raise RuntimeError("Document store not initialized")
+    
+    if _data_dir is None:
+        raise RuntimeError("Data directory not configured. Call initialize_document_store with data_dir parameter.")
+    
+    return _document_store.load_patient_timeline(person_id, _data_dir, chunk_element)
 
 
 @mcp.tool()
