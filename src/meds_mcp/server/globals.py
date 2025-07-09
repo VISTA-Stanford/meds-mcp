@@ -14,7 +14,7 @@ def initialize_athena_ontology(ontology_dir: str):
     Initialize the Athena ontology from the specified directory.
     
     Args:
-        ontology_dir: Directory containing Athena ontology files
+        ontology_dir: Directory containing Athena ontology parquet files
     """
     global athena_ontology
     
@@ -22,11 +22,11 @@ def initialize_athena_ontology(ontology_dir: str):
     
     try:
         # Import here to avoid circular imports
-        from tools.ontologies import AthenaOntology
+        from meds_mcp.server.tools.ontologies import AthenaOntology
         
         ontology_path = Path(ontology_dir)
         if ontology_path.exists():
-            athena_ontology = AthenaOntology(str(ontology_path))
+            athena_ontology = AthenaOntology.load_from_parquet(str(ontology_path))
             print("Athena ontology loaded successfully!")
         else:
             print(f"Warning: Athena ontology directory not found: {ontology_path}")

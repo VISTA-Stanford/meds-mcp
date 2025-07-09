@@ -15,7 +15,7 @@ mcp = FastMCP(name="meds-mcp-server")
 # Import all tool functions
 from meds_mcp.server.tools.search import search_patient_events, get_events_by_type, get_historical_values
 from meds_mcp.server.tools.ontologies import get_code_metadata, get_ancestor_subgraph, get_descendant_subgraph
-from meds_mcp.server.tools.athena import (
+from meds_mcp.server.rag.simple_storage import (
     load_patient_xml, load_patient_timeline, get_patient_event, list_patients,
     get_document_store_stats, list_all_node_ids, list_patient_node_ids, get_patient_events
 )
