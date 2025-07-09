@@ -9,14 +9,9 @@ from llama_index.core.schema import TextNode, Document, NodeWithScore
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.storage.docstore import SimpleDocumentStore
 from llama_index.core.storage import StorageContext
-from mcp.server.fastmcp import FastMCP
-
-# Global MCP instance
-mcp = FastMCP("search")
 
 # Import the module to access the global document store
 import meds_mcp.server.rag.simple_storage as storage_module
-
 
 def set_document_store(store):
     """Set the global document store for search tools (for backward compatibility)."""
@@ -24,11 +19,9 @@ def set_document_store(store):
     # since we access _document_store through the module
     pass
 
-
 def get_document_store():
     """Get the current document store from the storage module."""
     return storage_module._document_store
-
 
 def parse_timestamp_from_metadata(timestamp_value) -> Optional[datetime.datetime]:
     """Parse timestamp from metadata, handling both string and datetime types."""
@@ -53,12 +46,10 @@ def parse_timestamp_from_metadata(timestamp_value) -> Optional[datetime.datetime
     
     return None
 
-
 class SortOrder(Enum):
     RELEVANCE = "relevance"
     DATE_ASC = "date_asc"
     DATE_DESC = "date_desc"
-
 
 @dataclass
 class SearchFilters:
@@ -80,7 +71,6 @@ class SearchFilters:
         if self.start is not None and self.end is not None:
             return (self.start, self.end)
         return None
-
 
 class PatientTimelineRetriever:
     """Patient timeline retriever using document store and BM25 retriever."""
@@ -197,15 +187,7 @@ class PatientTimelineRetriever:
         return filtered
     
     def _apply_attribute_filters(self, results, attribute_filters: Dict[str, Any]):
-        """Apply filters on XML attributes like code, name, unit, etc.
-        
-        Args:
-            results: List of search results
-            attribute_filters: Dict where keys are attribute names and values can be:
-                - str: Exact match (case-insensitive for string attributes)
-                - List[str]: Any of the values in the list (case-insensitive for string attributes)
-                - Pattern: Regex pattern (import re first)
-        """
+        """Apply filters on XML attributes like code, name, unit, etc."""
         import re
         
         filtered = results
@@ -218,79 +200,55 @@ class PatientTimelineRetriever:
                     result.node.metadata[attr_name].lower() == attr_value.lower()
                 ]
             elif isinstance(attr_value, list):
-                # Case-insensitive match for any value in the list
-                attr_value_lower = [str(v).lower() for v in attr_value]
+                # Case-insensitive match against any value in the list
                 filtered = [
                     result for result in filtered
                     if result.node.metadata.get(attr_name) and 
-                    str(result.node.metadata[attr_name]).lower() in attr_value_lower
+                    result.node.metadata[attr_name].lower() in [v.lower() for v in attr_value]
                 ]
             elif hasattr(attr_value, 'pattern'):  # Regex pattern
-                # Regex match (case-insensitive by default)
+                # Regex match
                 filtered = [
                     result for result in filtered
                     if result.node.metadata.get(attr_name) and 
-                    attr_value.search(str(result.node.metadata[attr_name]))
-                ]
-            else:
-                # Try exact match for other types (case-sensitive)
-                filtered = [
-                    result for result in filtered
-                    if result.node.metadata.get(attr_name) == attr_value
+                    re.search(attr_value, result.node.metadata[attr_name])
                 ]
         
         return filtered
     
     def _limit_by_encounters(self, results, max_encounters: int):
-        """Limit results to the most recent encounters."""
+        """Limit results to a maximum number of encounters."""
         if not results:
             return results
         
-        # Group by encounter and sort encounters by most recent document
+        # Group by encounter (assuming encounter_id in metadata)
         encounter_groups = {}
         for result in results:
-            encounter_id = result.node.metadata.get('encounter_id') or "unknown"
+            encounter_id = result.node.metadata.get('encounter_id', 'unknown')
             if encounter_id not in encounter_groups:
                 encounter_groups[encounter_id] = []
             encounter_groups[encounter_id].append(result)
         
-        # Sort encounters by their most recent document timestamp
-        sorted_encounters = sorted(
-            encounter_groups.items(),
-            key=lambda x: max(
-                parse_timestamp_from_metadata(doc.node.metadata.get('timestamp')) or datetime.datetime.min
-                for doc in x[1] 
-                if doc.node.metadata.get('timestamp')
-            ),
-            reverse=True
-        )
+        # Take top encounters
+        sorted_encounters = sorted(encounter_groups.items(), 
+                                 key=lambda x: max(r.score for r in x[1]), 
+                                 reverse=True)
         
-        # Take only the most recent encounters
-        limited_encounters = sorted_encounters[:max_encounters]
-        
-        # Flatten results from selected encounters
         limited_results = []
-        for encounter_id, encounter_results in limited_encounters:
+        for encounter_id, encounter_results in sorted_encounters[:max_encounters]:
             limited_results.extend(encounter_results)
         
         return limited_results
     
     def _sort_results(self, results, sort_by: SortOrder):
-        """Sort results according to specified order."""
+        """Sort results based on the specified sort order."""
         if sort_by == SortOrder.RELEVANCE:
-            # Results are already sorted by relevance from BM25 retriever
+            # Already sorted by BM25 score
             return results
         elif sort_by == SortOrder.DATE_ASC:
-            return sorted(
-                results, 
-                key=lambda x: parse_timestamp_from_metadata(x.node.metadata.get('timestamp')) or datetime.datetime.min
-            )
+            return sorted(results, key=lambda r: parse_timestamp_from_metadata(r.node.metadata.get('timestamp')) or datetime.datetime.min)
         elif sort_by == SortOrder.DATE_DESC:
-            return sorted(
-                results, 
-                key=lambda x: parse_timestamp_from_metadata(x.node.metadata.get('timestamp')) or datetime.datetime.min,
-                reverse=True
-            )
+            return sorted(results, key=lambda r: parse_timestamp_from_metadata(r.node.metadata.get('timestamp')) or datetime.datetime.min, reverse=True)
         else:
             return results
     
@@ -299,27 +257,32 @@ class PatientTimelineRetriever:
         if filters is None:
             filters = SearchFilters()
         
-        # Get nodes to search
+        # Get all events for the specified type
+        all_events = []
+        
         if person_id:
-            # Search within specific patient
+            # Get events for specific patient
             if person_id not in self.patients:
                 return []
-            nodes = self.patients[person_id].nodes
+            patient = self.patients[person_id]
+            for node in patient.nodes:
+                if node.metadata.get('event_type') == event_type:
+                    all_events.append(NodeWithScore(node=node, score=1.0))
         else:
-            # Search across all patients
-            nodes = self.global_nodes
-        
-        # Filter nodes by event type
-        type_nodes = [
-            node for node in nodes 
-            if node.metadata.get('event_type') == event_type
-        ]
-        
-        # Convert to search results for consistent filtering
-        results = [NodeWithScore(node=node, score=1.0) for node in type_nodes]
+            # Get events across all patients
+            for node in self.global_nodes:
+                if node.metadata.get('event_type') == event_type:
+                    all_events.append(NodeWithScore(node=node, score=1.0))
         
         # Apply filters
-        filtered_results = self._apply_filters(results, filters)
+        filtered_results = self._apply_filters(all_events, filters)
+        
+        # Sort results
+        sorted_results = self._sort_results(filtered_results, filters.sort_by)
+        
+        # Limit results
+        if filters.max_results:
+            sorted_results = sorted_results[:filters.max_results]
         
         # Convert to dictionary format
         return [
@@ -329,101 +292,62 @@ class PatientTimelineRetriever:
                 "metadata": result.node.metadata,
                 "timestamp": result.node.metadata.get('timestamp'),
                 "event_type": result.node.metadata.get('event_type'),
-                "encounter_id": result.node.metadata.get('encounter_id'),
+                "code": result.node.metadata.get('code'),
+                "name": result.node.metadata.get('name'),
                 "person_id": result.node.metadata.get('person_id'),
+                "score": result.score,
             }
-            for result in filtered_results
+            for result in sorted_results
         ]
-
+    
     def get_historical_values(self, attribute_filters: Dict[str, Any], 
                             person_id: Optional[str] = None,
                             filters: Optional[SearchFilters] = None) -> List[Dict[str, Any]]:
-        """
-        Get historical values using attribute matching.
-        
-        Args:
-            attribute_filters: Dict for attribute matching (e.g., {"code": "LOINC/2160-0", "name": "Creatinine"})
-            person_id: Optional person_id to search within specific patient
-            filters: Optional SearchFilters object to constrain the search (time range, etc.)
-            
-        Returns:
-            List of observations with timestamps, sorted chronologically
-        """
+        """Get historical values using attribute matching."""
         if filters is None:
             filters = SearchFilters()
         
-        # Get nodes to search
-        if person_id:
-            # Search within specific patient
-            if person_id not in self.patients:
-                return []
-            matching_nodes = self.patients[person_id].nodes
-        else:
-            # Search across all patients
-            matching_nodes = self.global_nodes
+        # Get all measurement events
+        measurement_events = self.get_events_by_type("measurement", person_id, filters)
         
-        # Apply attribute filters
-        if attribute_filters:
-            # Convert to search results for consistent filtering
-            temp_results = [NodeWithScore(node=node, score=1.0) for node in matching_nodes]
+        # Filter by attribute filters
+        filtered_events = []
+        for event in measurement_events:
+            matches = True
+            for attr_name, attr_value in attribute_filters.items():
+                if isinstance(attr_value, str):
+                    if event['metadata'].get(attr_name, '').lower() != attr_value.lower():
+                        matches = False
+                        break
+                elif isinstance(attr_value, list):
+                    if event['metadata'].get(attr_name, '').lower() not in [v.lower() for v in attr_value]:
+                        matches = False
+                        break
             
-            # Apply attribute filtering
-            filtered_results = self._apply_attribute_filters(temp_results, attribute_filters)
-            matching_nodes = [result.node for result in filtered_results]
+            if matches:
+                filtered_events.append(event)
         
-        # Convert to search results for consistent filtering
-        results = [NodeWithScore(node=node, score=1.0) for node in matching_nodes]
+        # Convert to historical values format
+        historical_values = []
+        for event in filtered_events:
+            timestamp = parse_timestamp_from_metadata(event['metadata'].get('timestamp'))
+            if timestamp:
+                historical_values.append({
+                    'timestamp': timestamp,
+                    'value': event['content'],
+                    'unit': event['metadata'].get('unit'),
+                    'code': event['metadata'].get('code'),
+                    'name': event['metadata'].get('name'),
+                    'person_id': event['person_id'],
+                    'node_id': event['id']
+                })
         
-        # Apply additional filters
-        filtered_results = self._apply_filters(results, filters)
+        # Sort by timestamp
+        historical_values.sort(key=lambda x: x['timestamp'])
         
-        # Convert to dictionary format and extract values
-        observations = []
-        for result in filtered_results:
-            # Try to extract the actual value from the content or metadata
-            value = None
-            
-            # Check if there's a 'value' field in metadata
-            if 'value' in result.node.metadata:
-                value = result.node.metadata['value']
-            else:
-                # Try to extract from the XML content
-                content = result.node.text
-                # Look for common value patterns in XML
-                import re
-                # Try to find numeric values
-                numeric_match = re.search(r'value="([^"]*)"', content)
-                if numeric_match:
-                    value = numeric_match.group(1)
-                else:
-                    # Try to find any text content that might be a value
-                    # Remove XML tags and get text content
-                    clean_text = re.sub(r'<[^>]+>', '', content).strip()
-                    if clean_text and len(clean_text) < 100:  # Reasonable length for a value
-                        value = clean_text
-            
-            observation = {
-                "id": result.node.node_id,
-                "timestamp": parse_timestamp_from_metadata(result.node.metadata.get('timestamp')),
-                "value": value,
-                "code": result.node.metadata.get('code'),
-                "name": result.node.metadata.get('name'),
-                "unit": result.node.metadata.get('unit'),
-                "metadata": result.node.metadata,
-                "content": result.node.text,
-                "person_id": result.node.metadata.get('person_id'),
-            }
-            observations.append(observation)
-        
-        # Sort by timestamp (ascending - oldest first)
-        observations.sort(key=lambda x: x['timestamp'] or datetime.datetime.min)
-        
-        return observations
+        return historical_values
 
-
-# MCP Tools
-
-@mcp.tool()
+# Plain function implementations (no decorators)
 async def search_patient_events(
     query: str,
     person_id: Optional[str] = None,
@@ -486,8 +410,6 @@ async def search_patient_events(
     retriever = PatientTimelineRetriever(document_store)
     return retriever.search(query, person_id, search_filters)
 
-
-@mcp.tool()
 async def get_events_by_type(
     event_type: str,
     person_id: Optional[str] = None,
@@ -541,8 +463,6 @@ async def get_events_by_type(
     retriever = PatientTimelineRetriever(document_store)
     return retriever.get_events_by_type(event_type, person_id, search_filters)
 
-
-@mcp.tool()
 async def get_historical_values(
     attribute_filters: Dict[str, Any],
     person_id: Optional[str] = None,

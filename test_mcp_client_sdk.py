@@ -72,7 +72,7 @@ async def test_mcp_server():
                     print("\n📋 Testing get_historical_values...")
                     historical_result = await session.call_tool(
                         "get_historical_values",
-                        {"attribute_filters": {"code": "LOINC/2160-0"}, "person_id": "135917824"}
+                        {"attribute_filters": {"code": "LOINC/8480-6"}, "person_id": "135917824"}
                     )
                     # Extract actual result from CallToolResult
                     historical_data = historical_result.structuredContent.get('result', [])
