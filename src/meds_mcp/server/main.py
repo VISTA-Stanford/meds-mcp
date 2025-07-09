@@ -46,7 +46,8 @@ def initialize_server():
     # Initialize Athena ontology
     from meds_mcp.server.globals import initialize_athena_ontology
     ontology_dir = os.getenv("ONTOLOGY_DIR", "data/athena_omop_ontologies")
-    initialize_athena_ontology(ontology_dir)
+    use_lazy_ontology = os.getenv("USE_LAZY_ONTOLOGY", "false").lower() == "true"
+    initialize_athena_ontology(ontology_dir, use_lazy=use_lazy_ontology)
 
 def main():
     """Main entry point for the server."""

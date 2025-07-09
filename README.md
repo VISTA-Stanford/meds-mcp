@@ -11,6 +11,12 @@ MEDS Model Context Protocol (MCP) Server and Client
 
 ## Launch MCP Server & Test Client
 
+### Launch server
 ```
 python src/meds_mcp/server/main.py
+```
+
+### Launch client tests
+```
+python scripts/test_mcp_client_sdk.py
 ```
