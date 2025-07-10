@@ -39,6 +39,9 @@ dependencies = [
   "llama-index-storage-docstore-mongodb>=0.1.0",
   "llama-index-storage-index-store-mongodb>=0.1.0",
   "llama-index-llms-openai>=0.1.0",
+  "llama-index-retrievers-bm25>=0.1.0",
+  "PyYAML>=6.0.0",
+  "lxml>=4.9.0",
 ]
 
 [project.optional-dependencies]

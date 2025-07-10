@@ -92,10 +92,10 @@ class AthenaFileReader:
     def preprocess_csv(self, file_path: str) -> str:
         """
         Preprocess Athena CSV files.
-        
+
         Args:
             file_path: Path to the CSV file to preprocess
-            
+
         Returns:
             Path to the preprocessed file (or original if no preprocessing needed)
         """
@@ -362,139 +362,151 @@ class AthenaOntology:
         """Get immediate parents of a code."""
         return self.parents_map.get(code, set())
 
-    def get_ancestor_subgraph(self, code: str, vocabularies: Optional[list[str]] = None) -> nx.DiGraph:
+    def get_ancestor_subgraph(
+        self, code: str, vocabularies: Optional[list[str]] = None
+    ) -> nx.DiGraph:
         """
         Get ancestor subgraph (parents and their parents) for a given code.
-        
+
         Args:
             code: The starting code
             vocabularies: Optional list of vocabulary prefixes to include (e.g., ["RxNorm", "ATC"]).
                         Use ["*"] to include all vocabularies (default behavior).
-        
+
         Returns:
             NetworkX DiGraph containing the ancestor subgraph
         """
         if code not in self.description_map:
             return nx.DiGraph()
-            
+
         # Handle vocabulary filtering
         if vocabularies is None or vocabularies == ["*"]:
             allowed_vocabularies = None
         else:
             allowed_vocabularies = set(vocabularies)
-            
+
         def _get_vocabulary(code: str) -> str:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
-            return code.split('/')[0] if '/' in code else code
-            
+            return code.split("/")[0] if "/" in code else code
+
         def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
             """Recursively build filtered subgraph."""
             if current_code in visited:
                 return
-                
+
             visited.add(current_code)
-            
+
             # Check vocabulary filtering (but always include the starting node)
             if allowed_vocabularies is not None and current_code != code:
                 vocab = _get_vocabulary(current_code)
                 if vocab not in allowed_vocabularies:
                     return
-                    
+
             # Add node with metadata
             G.add_node(
                 current_code,
                 description=self.description_map.get(current_code, ""),
-                is_starting_node=(current_code == code)
+                is_starting_node=(current_code == code),
             )
-            
+
             # Add parents
             for parent in self.get_parents(current_code):
                 if parent in self.description_map:  # Ensure parent exists
                     # Check if parent should be included based on vocabulary filtering
-                    if allowed_vocabularies is None or _get_vocabulary(parent) in allowed_vocabularies:
+                    if (
+                        allowed_vocabularies is None
+                        or _get_vocabulary(parent) in allowed_vocabularies
+                    ):
                         G.add_edge(current_code, parent)
                         _get_filtered_subgraph(parent, visited, G)
-        
+
         G = nx.DiGraph()
         visited = set()
-        
+
         _get_filtered_subgraph(code, visited, G)
-        
+
         return G
-        
-    def get_descendant_subgraph(self, code: str, vocabularies: Optional[list[str]] = None) -> nx.DiGraph:
+
+    def get_descendant_subgraph(
+        self, code: str, vocabularies: Optional[list[str]] = None
+    ) -> nx.DiGraph:
         """
         Get descendant subgraph (children and their children) for a given code.
-        
+
         Args:
             code: The starting code
             vocabularies: Optional list of vocabulary prefixes to include (e.g., ["RxNorm", "ATC"]).
                         Use ["*"] to include all vocabularies (default behavior).
-        
+
         Returns:
             NetworkX DiGraph containing the descendant subgraph
         """
         if code not in self.description_map:
             return nx.DiGraph()
-            
+
         # Handle vocabulary filtering
         if vocabularies is None or vocabularies == ["*"]:
             allowed_vocabularies = None
         else:
             allowed_vocabularies = set(vocabularies)
-            
+
         def _get_vocabulary(code: str) -> str:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
-            return code.split('/')[0] if '/' in code else code
-            
+            return code.split("/")[0] if "/" in code else code
+
         def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
             """Recursively build filtered subgraph."""
             if current_code in visited:
                 return
-                
+
             visited.add(current_code)
-            
+
             # Check vocabulary filtering (but always include the starting node)
             if allowed_vocabularies is not None and current_code != code:
                 vocab = _get_vocabulary(current_code)
                 if vocab not in allowed_vocabularies:
                     return
-                    
+
             # Add node with metadata
             G.add_node(
                 current_code,
                 description=self.description_map.get(current_code, ""),
-                is_starting_node=(current_code == code)
+                is_starting_node=(current_code == code),
             )
-            
+
             # Add children
             for child in self.get_children(current_code):
                 if child in self.description_map:  # Ensure child exists
                     # Check if child should be included based on vocabulary filtering
-                    if allowed_vocabularies is None or _get_vocabulary(child) in allowed_vocabularies:
-                        G.add_edge(child, current_code)  # Note: edge direction is child -> parent
+                    if (
+                        allowed_vocabularies is None
+                        or _get_vocabulary(child) in allowed_vocabularies
+                    ):
+                        G.add_edge(
+                            child, current_code
+                        )  # Note: edge direction is child -> parent
                         _get_filtered_subgraph(child, visited, G)
-        
+
         G = nx.DiGraph()
         visited = set()
-        
+
         _get_filtered_subgraph(code, visited, G)
-        
+
         return G
-        
+
     def get_code_metadata(self, code: str) -> Dict[str, Any]:
         """
         Get metadata for a given code.
-        
+
         Args:
             code: The code to get metadata for
-            
+
         Returns:
             Dictionary containing code metadata
         """
         if code not in self.description_map:
             return {"error": f"Code {code} not found in ontology"}
-            
+
         return {
             "code": code,
             "description": self.description_map.get(code, ""),
@@ -505,18 +517,15 @@ class AthenaOntology:
         """
         Get metadata for all nodes in a graph.
 
-        TODO: Add relationship metadata to edges 
-        
+        TODO: Add relationship metadata to edges
+
         Args:
             G: NetworkX DiGraph containing the ontology subgraph
-            
+
         Returns:
             Dictionary mapping node codes to their metadata dictionaries
         """
-        return {
-            node: self.get_code_metadata(node)
-            for node in G.nodes()
-        }
+        return {node: self.get_code_metadata(node) for node in G.nodes()}
 
 
 class LazyAthenaOntology:
@@ -582,10 +591,12 @@ class LazyAthenaOntology:
 
                 # Collect only the mapping data, not full descriptions
                 mapping_data = (
-                    concepts_df.select([
-                        code_col.alias("code"),
-                        concept_id_col.alias("concept_id"),
-                    ])
+                    concepts_df.select(
+                        [
+                            code_col.alias("code"),
+                            concept_id_col.alias("concept_id"),
+                        ]
+                    )
                     .collect()
                     .rows()
                 )
@@ -600,13 +611,14 @@ class LazyAthenaOntology:
 
                 # Add OMOP concept_id mappings (only if not already mapped)
                 omop_mapping_data = (
-                    concepts_df.select([concept_id_col])
-                    .collect()
-                    .rows()
+                    concepts_df.select([concept_id_col]).collect().rows()
                 )
 
                 for (concept_id,) in omop_mapping_data:
-                    if concept_id is not None and concept_id not in concept_id_to_code_map:
+                    if (
+                        concept_id is not None
+                        and concept_id not in concept_id_to_code_map
+                    ):
                         omop_code = f"OMOP_CONCEPT_ID/{concept_id}"
                         concept_id_to_code_map[concept_id] = omop_code
                         code_to_concept_id_map[omop_code] = concept_id
@@ -651,8 +663,7 @@ class LazyAthenaOntology:
 
         # Query the concepts dataframe
         result = (
-            self.concepts_df
-            .filter(pl.col("concept_id").cast(pl.Int64) == concept_id)
+            self.concepts_df.filter(pl.col("concept_id").cast(pl.Int64) == concept_id)
             .select(pl.col("concept_name"))
             .collect()
         )
@@ -669,8 +680,9 @@ class LazyAthenaOntology:
 
         # Query for concepts where this code is the direct parent
         children_result = (
-            self.ancestors_df
-            .filter(pl.col("ancestor_concept_id").cast(pl.Int64) == concept_id)
+            self.ancestors_df.filter(
+                pl.col("ancestor_concept_id").cast(pl.Int64) == concept_id
+            )
             .select(pl.col("descendant_concept_id").cast(pl.Int64))
             .collect()
         )
@@ -698,8 +710,9 @@ class LazyAthenaOntology:
 
         # Query ancestor relationships
         ancestors_result = (
-            self.ancestors_df
-            .filter(pl.col("descendant_concept_id").cast(pl.Int64) == concept_id)
+            self.ancestors_df.filter(
+                pl.col("descendant_concept_id").cast(pl.Int64) == concept_id
+            )
             .select(pl.col("ancestor_concept_id").cast(pl.Int64))
             .collect()
         )
@@ -712,8 +725,7 @@ class LazyAthenaOntology:
         # Query "Maps to" relationships for non-standard concepts
         # Check if this concept is non-standard
         concept_check = (
-            self.concepts_df
-            .filter(pl.col("concept_id").cast(pl.Int64) == concept_id)
+            self.concepts_df.filter(pl.col("concept_id").cast(pl.Int64) == concept_id)
             .select(pl.col("standard_concept"))
             .collect()
         )
@@ -721,8 +733,9 @@ class LazyAthenaOntology:
         if concept_check.height > 0 and concept_check.row(0)[0] is None:
             # This is a non-standard concept, look for "Maps to" relationships
             maps_to_result = (
-                self.relationships_df
-                .filter(pl.col("concept_id_1").cast(pl.Int64) == concept_id)
+                self.relationships_df.filter(
+                    pl.col("concept_id_1").cast(pl.Int64) == concept_id
+                )
                 .select(pl.col("concept_id_2").cast(pl.Int64))
                 .collect()
             )
@@ -734,141 +747,153 @@ class LazyAthenaOntology:
 
         return parents
 
-    def get_ancestor_subgraph(self, code: str, vocabularies: Optional[list[str]] = None) -> nx.DiGraph:
+    def get_ancestor_subgraph(
+        self, code: str, vocabularies: Optional[list[str]] = None
+    ) -> nx.DiGraph:
         """
         Get ancestor subgraph (parents and their parents) for a given code.
-        
+
         Args:
             code: The starting code
             vocabularies: Optional list of vocabulary prefixes to include (e.g., ["RxNorm", "ATC"]).
                         Use ["*"] to include all vocabularies (default behavior).
-        
+
         Returns:
             NetworkX DiGraph containing the ancestor subgraph
         """
         if code not in self.code_to_concept_id_map:
             return nx.DiGraph()
-            
+
         # Handle vocabulary filtering
         if vocabularies is None or vocabularies == ["*"]:
             allowed_vocabularies = None
         else:
             allowed_vocabularies = set(vocabularies)
-            
+
         def _get_vocabulary(code: str) -> str:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
-            return code.split('/')[0] if '/' in code else code
-            
+            return code.split("/")[0] if "/" in code else code
+
         def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
             """Recursively build filtered subgraph."""
             if current_code in visited:
                 return
-                
+
             visited.add(current_code)
-            
+
             # Check vocabulary filtering (but always include the starting node)
             if allowed_vocabularies is not None and current_code != code:
                 vocab = _get_vocabulary(current_code)
                 if vocab not in allowed_vocabularies:
                     return
-                    
+
             # Add node with metadata
             description = self.get_description(current_code) or ""
             G.add_node(
                 current_code,
                 description=description,
-                is_starting_node=(current_code == code)
+                is_starting_node=(current_code == code),
             )
-            
+
             # Add parents
             for parent in self.get_parents(current_code):
                 if parent in self.code_to_concept_id_map:  # Ensure parent exists
                     # Check if parent should be included based on vocabulary filtering
-                    if allowed_vocabularies is None or _get_vocabulary(parent) in allowed_vocabularies:
+                    if (
+                        allowed_vocabularies is None
+                        or _get_vocabulary(parent) in allowed_vocabularies
+                    ):
                         G.add_edge(current_code, parent)
                         _get_filtered_subgraph(parent, visited, G)
-        
+
         G = nx.DiGraph()
         visited = set()
-        
+
         _get_filtered_subgraph(code, visited, G)
-        
+
         return G
-        
-    def get_descendant_subgraph(self, code: str, vocabularies: Optional[list[str]] = None) -> nx.DiGraph:
+
+    def get_descendant_subgraph(
+        self, code: str, vocabularies: Optional[list[str]] = None
+    ) -> nx.DiGraph:
         """
         Get descendant subgraph (children and their children) for a given code.
-        
+
         Args:
             code: The starting code
             vocabularies: Optional list of vocabulary prefixes to include (e.g., ["RxNorm", "ATC"]).
                         Use ["*"] to include all vocabularies (default behavior).
-        
+
         Returns:
             NetworkX DiGraph containing the descendant subgraph
         """
         if code not in self.code_to_concept_id_map:
             return nx.DiGraph()
-            
+
         # Handle vocabulary filtering
         if vocabularies is None or vocabularies == ["*"]:
             allowed_vocabularies = None
         else:
             allowed_vocabularies = set(vocabularies)
-            
+
         def _get_vocabulary(code: str) -> str:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
-            return code.split('/')[0] if '/' in code else code
-            
+            return code.split("/")[0] if "/" in code else code
+
         def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
             """Recursively build filtered subgraph."""
             if current_code in visited:
                 return
-                
+
             visited.add(current_code)
-            
+
             # Check vocabulary filtering (but always include the starting node)
             if allowed_vocabularies is not None and current_code != code:
                 vocab = _get_vocabulary(current_code)
                 if vocab not in allowed_vocabularies:
                     return
-                    
+
             # Add node with metadata
             description = self.get_description(current_code) or ""
             G.add_node(
                 current_code,
                 description=description,
-                is_starting_node=(current_code == code)
+                is_starting_node=(current_code == code),
             )
-            
+
             # Add children
             for child in self.get_children(current_code):
                 if child in self.code_to_concept_id_map:  # Ensure child exists
                     # Check if child should be included based on vocabulary filtering
-                    if allowed_vocabularies is None or _get_vocabulary(child) in allowed_vocabularies:
-                        G.add_edge(child, current_code)  # Note: edge direction is child -> parent
+                    if (
+                        allowed_vocabularies is None
+                        or _get_vocabulary(child) in allowed_vocabularies
+                    ):
+                        G.add_edge(
+                            child, current_code
+                        )  # Note: edge direction is child -> parent
                         _get_filtered_subgraph(child, visited, G)
-        
+
         G = nx.DiGraph()
         visited = set()
-        
+
         _get_filtered_subgraph(code, visited, G)
-        
+
         return G
-        
+
     def get_code_metadata(self, code: str) -> Dict[str, Any]:
         """
         Get metadata for a given code.
-        
+
         Args:
             code: The code to get metadata for
-            
+
         Returns:
             Dictionary containing code metadata
         """
         if code not in self.code_to_concept_id_map:
             return {"error": f"Code {code} not found in ontology"}
-            
+
         return {
             "code": code,
             "description": self.get_description(code) or "",
@@ -879,18 +904,15 @@ class LazyAthenaOntology:
         """
         Get metadata for all nodes in a graph.
 
-        TODO: Add relationship metadata to edges 
-        
+        TODO: Add relationship metadata to edges
+
         Args:
             G: NetworkX DiGraph containing the ontology subgraph
-            
+
         Returns:
             Dictionary mapping node codes to their metadata dictionaries
         """
-        return {
-            node: self.get_code_metadata(node)
-            for node in G.nodes()
-        }
+        return {node: self.get_code_metadata(node) for node in G.nodes()}
 
 
 def get_ontology() -> Optional[Union[AthenaOntology, LazyAthenaOntology]]:
@@ -902,58 +924,108 @@ def get_ontology() -> Optional[Union[AthenaOntology, LazyAthenaOntology]]:
 async def get_code_metadata(code: str) -> Dict[str, Any]:
     """
     Get metadata for a medical code from the Athena ontology.
-    
+
     Args:
         code: Medical code to look up (e.g., "SNOMED/123456")
-        
+
     Returns:
         Dictionary with code metadata including description and vocabulary
     """
     ontology = get_ontology()
     if ontology is None:
         return {"error": "Athena ontology not loaded"}
-    
+
     return ontology.get_code_metadata(code)
 
 
-async def get_ancestor_subgraph(code: str, vocabularies: Optional[list[str]] = None) -> Dict[str, Any]:
+async def get_ancestor_subgraph(
+    code: str, vocabularies: Optional[list[str]] = None
+) -> Dict[str, Any]:
     """
     Get ancestor subgraph for a code, optionally restricted to specific vocabularies.
-    
+
     Args:
         code: The starting medical code
-        vocabularies: List of allowed vocabularies (e.g., ['RxNorm', 'ATC']). 
+        vocabularies: List of allowed vocabularies (e.g., ['RxNorm', 'ATC']).
                      Use ['*'] to allow all vocabularies. Default is None (all vocabularies).
-                     
+
     Returns:
-        Dictionary with graph metadata for all ancestor nodes
+        Dictionary with nodes, edges, and metadata for the ancestor subgraph
     """
     ontology = get_ontology()
     if ontology is None:
         return {"error": "Athena ontology not loaded"}
-    
+
     G = ontology.get_ancestor_subgraph(code, vocabularies)
-    return ontology.get_graph_metadata(G)
+
+    # Convert NetworkX graph to JSON-serializable format
+    nodes = []
+    for node in G.nodes():
+        node_data = G.nodes[node]
+        nodes.append(
+            {
+                "code": node,
+                "name": ontology.get_description(node) or node,
+                "description": node_data.get("description", ""),
+                "is_starting_node": node_data.get("is_starting_node", False),
+            }
+        )
+
+    edges = []
+    for source, target in G.edges():
+        edges.append({"source": source, "target": target})
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
 
 
-async def get_descendant_subgraph(code: str, vocabularies: Optional[list[str]] = None) -> Dict[str, Any]:
+async def get_descendant_subgraph(
+    code: str, vocabularies: Optional[list[str]] = None
+) -> Dict[str, Any]:
     """
     Get descendant subgraph for a code, optionally restricted to specific vocabularies.
-    
+
     Args:
         code: The starting medical code
-        vocabularies: List of allowed vocabularies (e.g., ['RxNorm', 'ATC']). 
+        vocabularies: List of allowed vocabularies (e.g., ['RxNorm', 'ATC']).
                      Use ['*'] to allow all vocabularies. Default is None (all vocabularies).
-                     
+
     Returns:
-        Dictionary with graph metadata for all descendant nodes
+        Dictionary with nodes, edges, and metadata for the descendant subgraph
     """
     ontology = get_ontology()
     if ontology is None:
         return {"error": "Athena ontology not loaded"}
-    
+
     G = ontology.get_descendant_subgraph(code, vocabularies)
-    return ontology.get_graph_metadata(G)
+
+    # Convert NetworkX graph to JSON-serializable format
+    nodes = []
+    for node in G.nodes():
+        node_data = G.nodes[node]
+        nodes.append(
+            {
+                "code": node,
+                "name": ontology.get_description(node) or node,
+                "description": node_data.get("description", ""),
+                "is_starting_node": node_data.get("is_starting_node", False),
+            }
+        )
+
+    edges = []
+    for source, target in G.edges():
+        edges.append({"source": source, "target": target})
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+    }
 
 
 # Helper function to create a lazy ontology
@@ -964,12 +1036,12 @@ def create_lazy_ontology(
 ) -> LazyAthenaOntology:
     """
     Create a LazyAthenaOntology instance that queries dataframes on-demand.
-    
+
     Args:
         athena_path: Path to Athena snapshot directory or zip archive
         code_metadata: Optional dictionary mapping codes to metadata
         ignore_invalid: If True, skip concepts where invalid_reason is not empty
-        
+
     Returns:
         LazyAthenaOntology instance
     """
@@ -978,4 +1050,3 @@ def create_lazy_ontology(
         code_metadata=code_metadata,
         ignore_invalid=ignore_invalid,
     )
-    
