@@ -5,9 +5,11 @@ Script for indexing patient data from XML files into MeiliSearch.
 from pathlib import Path
 from lxml import etree
 from meilisearch import Client
+from llama_index.core.schema import Document
 from meds_mcp.utils.xml_loader import parse_timestamp, SimpleXMLNodeParser
 
 def normalize_gender(g):
+    """Normalize gender values from XML to standard format."""
     if not g:
         return None
     if g.upper() == "FEMALE":
@@ -17,6 +19,7 @@ def normalize_gender(g):
     return g.title()
 
 def normalize_ethnicity(e):
+    """Normalize ethnicity values from XML to standard format."""
     if not e:
         return None
     if "not hispanic" in e.lower():
@@ -26,20 +29,27 @@ def normalize_ethnicity(e):
     return e.title()
 
 def normalize_insurance_type(raw):
+    """Normalize insurance type, keeping only the first value if multiple are present."""
     if not raw:
         return None
-    # If multiple values, keep the first
     return raw.split("|")[0].strip()
 
 def extract_patient_events(xml_text, person_id):
+    """
+    Use SimpleXMLNodeParser to extract all <event> elements and their metadata from XML text.
+    Returns a list of nodes with metadata for further aggregation.
+    """
     parser = SimpleXMLNodeParser(chunk_element="event", id_metadata_key="person_id")
-    # Wrap xml_text in a Document object as expected by the parser
-    from llama_index.core.schema import Document
     doc = Document(text=xml_text, metadata={"person_id": person_id})
     nodes = parser.get_nodes_from_documents([doc])
     return nodes
 
 def parse_patient_xml(filepath):
+    """
+    Parse a patient XML file and extract demographic info, diagnosis codes, medication codes,
+    departments, and encounter count. Uses both direct XML parsing and event extraction.
+    Returns a dictionary suitable for indexing in MeiliSearch.
+    """
     tree = etree.parse(str(filepath))
     root = tree.getroot()
     person_id = root.attrib.get("person_id")
@@ -53,7 +63,7 @@ def parse_patient_xml(filepath):
     departments = set()
     encounter_count = 0
 
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         xml_text = f.read()
     events = extract_patient_events(xml_text, person_id)
     for node in events:
@@ -125,6 +135,10 @@ def parse_patient_xml(filepath):
     }
 
 def index_patients_from_xml(data_dir="data/collections/dev-corpus", index_name="patients"):
+    """
+    Index all patient XML files in the given directory into MeiliSearch.
+    Configures index settings, parses each XML, and uploads patient documents in batches.
+    """
     print(f"Indexing patients from XML files in {data_dir}...")
 
     # Initialize MeiliSearch client
@@ -170,7 +184,8 @@ def index_patients_from_xml(data_dir="data/collections/dev-corpus", index_name="
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             task_info = index.add_documents(batch)
-            print(f"Indexed batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size} (Task ID: {task_info.task_uid})")
+            print(f"Indexed batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size} "
+                  f"(Task ID: {task_info.task_uid})")
 
     print(f"Indexed {len(documents)} patients from XML files successfully")
 

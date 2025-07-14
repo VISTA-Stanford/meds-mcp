@@ -1,6 +1,9 @@
+"""
+Faceted search API for patient data using MeiliSearch.
+"""
 import json
-from fastapi import APIRouter, Query
 from typing import List, Optional
+from fastapi import APIRouter, Query
 from meds_mcp.server.tools.meilisearch_client import MCPMeiliSearch
 
 router = APIRouter()
@@ -30,9 +33,14 @@ def search_patients(
     max_encounters: int = Query(None),
     min_age: int = Query(None),
     max_age: int = Query(None),
-    sort_by: str = Query("relevance", enum=["relevance", "age_asc", "age_desc", "encounter_asc", "encounter_desc"]),
+    sort_by: str = Query(
+        "relevance",
+        enum=["relevance", "age_asc", "age_desc", "encounter_asc", "encounter_desc"]),
     limit: int = 10
 ):
+    """
+    Search for patients with faceted search capabilities.
+    """
     filters = []
 
     # Multi-select facets
@@ -60,6 +68,10 @@ def search_patients(
         filters.append(f"encounter_count >= {min_encounters}")
     if max_encounters is not None and max_encounters > 0:
         filters.append(f"encounter_count <= {max_encounters}")
+    if min_age is not None and min_age > 0:
+        filters.append(f"age >= {min_age}")
+    if max_age is not None and max_age > 0:
+        filters.append(f"age <= {max_age}")
 
     filter_str = " AND ".join(filters) if filters else None
 
