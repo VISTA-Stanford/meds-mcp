@@ -1,9 +1,19 @@
+import json
 from fastapi import APIRouter, Query
 from typing import List, Optional
 from meds_mcp.server.tools.meilisearch_client import MCPMeiliSearch
 
 router = APIRouter()
 searcher = MCPMeiliSearch()
+
+searcher.index.update_settings({
+    "filterableAttributes": [
+        "encounter_count",
+        "gender", "age", "age_range", "race", "ethnicity",
+        "diagnosis_codes", "medication_codes", "insurance_type", "departments"
+    ],
+    "sortableAttributes": ["age", "encounter_count"],
+})
 
 @router.get("/search")
 def search_patients(
@@ -28,7 +38,7 @@ def search_patients(
     # Multi-select facets
     def multi_filter(field, values):
         if values:
-            return f"{field} IN [{', '.join([f'\"{v}\"' for v in values])}]"
+            return f'{field} IN [{", ".join([json.dumps(v) for v in values])}]'
         return None
 
     for field, values in [
@@ -45,17 +55,16 @@ def search_patients(
         if f:
             filters.append(f)
 
-    # Range facets
-    if min_encounters is not None:
+    # Range facets (only add if not None and > 0)
+    if min_encounters is not None and min_encounters > 0:
         filters.append(f"encounter_count >= {min_encounters}")
-    if max_encounters is not None:
+    if max_encounters is not None and max_encounters > 0:
         filters.append(f"encounter_count <= {max_encounters}")
-    if min_age is not None:
-        filters.append(f"age >= {min_age}")
-    if max_age is not None:
-        filters.append(f"age <= {max_age}")
 
     filter_str = " AND ".join(filters) if filters else None
+
+    # Debug: print the filter string
+    print("Filter string:", filter_str)
 
     # Facets for UI
     facets = [

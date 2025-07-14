@@ -22,5 +22,5 @@ search:
   meilisearch:
     enabled: true
     host: "http://localhost:7700"
-    api_key: null  # Set to your API key if you're using authentication
+    api_key: null  # API key if you're using authentication
     index_name: "patients"

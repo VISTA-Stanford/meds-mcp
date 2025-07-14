@@ -44,6 +44,7 @@ dependencies = [
   "lxml>=4.9.0",
   "uvicorn[standard]>=0.22.0",
   "meilisearch>=0.31.0",
+  "fastapi>=0.100.0",
 ]
 
 [project.optional-dependencies]

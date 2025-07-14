@@ -212,3 +212,4 @@ __marimo__/
 # Project-specific Data & Cache
 data/
 **/cache
+dumps/
