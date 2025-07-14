@@ -13,8 +13,14 @@ data:
   corpus_dir: "data/collections/dev-corpus"
   # Use lazy loading for ontology (true/false)
   use_lazy_ontology: false
+  # Cache directory for intermediate results
+  cache_dir: "data/cache"
 
-# Logging settings
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" 
+# Search configuration
+search:
+  # MeiliSearch configuration
+  meilisearch:
+    enabled: true
+    host: "http://localhost:7700"
+    api_key: null  # Set to your API key if you're using authentication
+    index_name: "patients"

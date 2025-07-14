@@ -42,6 +42,8 @@ dependencies = [
   "llama-index-retrievers-bm25>=0.1.0",
   "PyYAML>=6.0.0",
   "lxml>=4.9.0",
+  "uvicorn[standard]>=0.22.0",
+  "meilisearch>=0.31.0",
 ]
 
 [project.optional-dependencies]
@@ -181,3 +183,7 @@ target-version = "py39"
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["B011"]
+
+[tool.hatch.envs.dev]
+python = "/opt/anaconda3/bin/python3.12"
+features = ["dev"]

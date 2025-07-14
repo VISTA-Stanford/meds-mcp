@@ -93,6 +93,9 @@ class XMLDocumentStore:
         # XML loader and parser
         self.xml_loader = XMLDocumentLoader()
         self.xml_parser = SimpleXMLNodeParser(chunk_element="event", id_metadata_key="person_id")
+        
+        # Load all patients on initialization
+        self.load_all_patients()
     
     def load_patient_xml(self, filepath: str) -> Dict[str, Any]:
         """Load a patient XML file and add it to the store."""
@@ -271,6 +274,17 @@ class XMLDocumentStore:
         
         patient = self.patients[person_id]
         return patient.get_events()
+
+    def load_all_patients(self):
+        """Scan data_dir for XML files and load each patient."""
+        xml_files = list(self.data_dir.glob("*.xml"))
+        print(f"Found XML files: {xml_files}")
+        for filepath in xml_files:
+            result = self.load_patient_xml(str(filepath))
+            if result.get("error"):
+                print(f"Error loading {filepath}: {result['error']}")
+            else:
+                print(f"Loaded patient: {result['results'][0]['person_id']}")
 
 def initialize_document_store(data_dir: str, cache_dir: str = "cache") -> XMLDocumentStore:
     """Initialize the global document store."""
