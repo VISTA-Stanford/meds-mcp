@@ -46,11 +46,25 @@ async def test_mcp_server():
                 # Test load_patient_timeline tool
                 if "load_patient_timeline" in tool_names:
                     print("\n📋 Testing load_patient_timeline...")
-                    result = await session.call_tool(
-                        "load_patient_timeline",
-                        {"person_id": "135917824", "chunk_element": "event"},
-                    )
-                    print(f"✅ Loaded patient timeline: {result}")
+                    person_ids = [
+                        "126692506",
+                        "126775356",
+                        "126915116",
+                        "126973798",
+                        "127010446",
+                        "127022669",
+                        "127032145",
+                        "127567043",
+                        "127672063",
+                        "127719245",
+                    ]
+                    for person_id in person_ids:
+                        # Test load_patient_timeline tool
+                        result = await session.call_tool(
+                            "load_patient_timeline",
+                            {"person_id": person_id, "chunk_element": "event"},
+                        )
+                        print(f"✅ Loaded patient timeline: {result}")
 
                     # Test listing patients
                     print("\n📋 Testing list_patients...")
@@ -61,7 +75,7 @@ async def test_mcp_server():
                     print("\n📋 Testing search_patient_events...")
                     search_result = await session.call_tool(
                         "search_patient_events",
-                        {"query": "cancer", "person_id": "135917824"},
+                        {"query": "lung cancer", "person_id": "126637006"},
                     )
                     # Extract actual result from CallToolResult
                     search_data = search_result.structuredContent.get("result", [])
@@ -74,8 +88,8 @@ async def test_mcp_server():
                     historical_result = await session.call_tool(
                         "get_historical_values",
                         {
-                            "attribute_filters": {"code": "LOINC/8480-6"},
-                            "person_id": "135917824",
+                            "attribute_filters": {"code": "LOINC/8310-5"},
+                            "person_id": "126637006",
                         },
                     )
                     # Extract actual result from CallToolResult
@@ -99,7 +113,7 @@ async def test_mcp_server():
                     test_codes = [
                         "LOINC/8480-6",  # Systolic blood pressure
                         "SNOMED/363358000",  #  - Malignant tumor of lung
-                        "ICD10/A41.9",  # Sepsis, unspecified organism
+                        "ICD10CM/A41.9",  # Sepsis, unspecified organism
                     ]
 
                     async def test_ontology_tools(code: str):
