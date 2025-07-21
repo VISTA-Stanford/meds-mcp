@@ -40,6 +40,7 @@ from meds_mcp.server.tools.ontologies import (
 from meds_mcp.server.rag.simple_storage import (
     load_patient_xml,
     load_patient_timeline,
+    get_patient_timeline,
     get_patient_event,
     list_patients,
     get_document_store_stats,
@@ -59,6 +60,7 @@ get_descendant_subgraph_tool = mcp.tool("get_descendant_subgraph")(
 )
 load_patient_xml_tool = mcp.tool("load_patient_xml")(load_patient_xml)
 load_patient_timeline_tool = mcp.tool("load_patient_timeline")(load_patient_timeline)
+get_patient_timeline_tool = mcp.tool("get_patient_timeline")(get_patient_timeline)
 get_patient_event_tool = mcp.tool("get_patient_event")(get_patient_event)
 list_patients_tool = mcp.tool("list_patients")(list_patients)
 get_document_store_stats_tool = mcp.tool("get_document_store_stats")(
