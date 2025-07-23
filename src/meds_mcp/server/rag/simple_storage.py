@@ -220,6 +220,20 @@ class XMLDocumentStore:
     def load_patient_timeline(self, person_id: str) -> Dict[str, Any]:
         """Load patient timeline by person_id from the data directory."""
         try:
+            # Check if patient is already loaded
+            if person_id in self.patients:
+                patient = self.patients[person_id]
+                print(
+                    f"Patient {person_id} already loaded ({len(patient.nodes)} events)"
+                )
+                return {
+                    "success": True,
+                    "person_id": person_id,
+                    "events_loaded": len(patient.nodes),
+                    "documents_loaded": len(patient.documents),
+                    "already_loaded": True,
+                }
+
             # Look for XML file with matching person_id
             xml_file = self.data_dir / f"{person_id}.xml"
 
@@ -245,12 +259,39 @@ class XMLDocumentStore:
                     "person_id": person_id,
                     "events_loaded": len(patient.nodes),
                     "documents_loaded": len(patient.documents),
+                    "already_loaded": False,
                 }
             else:
                 return {"error": f"Patient {person_id} not found after loading"}
 
         except Exception as e:
             return {"error": f"Failed to load patient timeline: {str(e)}"}
+
+    def get_patient_timeline(self, person_id: str) -> Dict[str, Any]:
+        """Get the entire original XML file content for a patient."""
+        try:
+            # Look for XML file with matching person_id
+            xml_file = self.data_dir / f"{person_id}.xml"
+
+            if not xml_file.exists():
+                return {"error": f"No XML file found for person_id {person_id}"}
+
+            print(f"Reading original XML file: {xml_file}")
+
+            # Read the entire XML file content
+            with open(xml_file, "r", encoding="utf-8") as f:
+                xml_content = f.read()
+
+            return {
+                "success": True,
+                "person_id": person_id,
+                "xml_content": xml_content,
+                "file_path": str(xml_file),
+                "file_size": len(xml_content),
+            }
+
+        except Exception as e:
+            return {"error": f"Failed to read patient timeline XML: {str(e)}"}
 
     def _create_patient_retriever(self, person_id: str):
         """Create BM25 retriever for a specific patient."""
@@ -388,6 +429,18 @@ async def load_patient_timeline(person_id: str) -> Dict[str, Any]:
         return result
     except Exception as e:
         return {"error": f"Failed to load patient timeline: {str(e)}"}
+
+
+async def get_patient_timeline(person_id: str) -> Dict[str, Any]:
+    """Get the entire original XML file content for a patient."""
+    if _document_store is None:
+        return {"error": "Document store not initialized"}
+
+    try:
+        result = _document_store.get_patient_timeline(person_id)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to get patient timeline: {str(e)}"}
 
 
 async def get_patient_event(node_id: str) -> Dict[str, Any]:
