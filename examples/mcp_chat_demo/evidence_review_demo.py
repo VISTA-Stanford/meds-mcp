@@ -143,10 +143,63 @@ def create_demo():
         
         with gr.Tabs() as tabs:
             with gr.Tab("Chat", id=0):
-                # Create all UI components exactly like demo.py
-                timeline_plot, chatbot, user_input, datetime_input, state = (
-                    UIComponents.create_main_interface()
-                )
+                # Create main interface components individually for custom layout
+                with gr.Accordion("Chat Interface", open=True):
+                    # Timeline visualization (initially hidden until data is loaded)
+                    timeline_plot = gr.Plot(value=None, show_label=False, visible=False)
+
+                    # Chat interface
+                    chatbot = gr.Chatbot(
+                        value=[], type="messages", elem_id="chatbot", show_copy_button=True
+                    )
+
+                    # Evidence Panel - directly below chatbot
+                    with gr.Accordion("Evidence References", open=True):
+                        gr.Markdown("*Evidence links will appear here when the LLM provides citations.*")
+                        evidence_buttons_container = gr.Column(visible=False)
+                        
+                        # Dynamic evidence buttons (initially empty)
+                        evidence_buttons = {}
+                        for i in range(10):  # Pre-create up to 10 evidence buttons
+                            evidence_buttons[f"btn_{i}"] = gr.Button(
+                                f"Evidence {i}", 
+                                visible=False,
+                                elem_classes=["evidence-button"],
+                                size="sm"
+                            )
+
+                    # Input row at bottom
+                    with gr.Row():
+                        with gr.Column(scale=1, min_width=200):
+                            user_input = gr.Textbox(
+                                label="Your message",
+                                placeholder="Type a message and press enter",
+                            )
+                        with gr.Column(scale=1, min_width=100):
+                            datetime_input = gr.Textbox(
+                                value="No data loaded",
+                                interactive=True,
+                                show_label=True,
+                                label="Simulated Query Timestamp",
+                            )
+
+                    # Add example prompts
+                    gr.Examples(
+                        examples=[[prompt] for prompt in defaults["example_prompts"]],
+                        inputs=user_input,
+                    )
+
+                    state = gr.State([])
+
+                    # Feedback handler for chatbot
+                    def handle_feedback(x: gr.LikeData):
+                        logger.info(
+                            f"Feedback: index={x.index}, value={x.value}, liked={x.liked}"
+                        )
+
+                    chatbot.like(handle_feedback, None, None, like_user_message=True)
+
+                # Other UI components
                 use_timeline, max_input_length = UIComponents.create_chat_settings(defaults)
                 patient_id_input, load_btn, load_status, test_connection_btn = (
                     UIComponents.create_patient_loading()
@@ -160,27 +213,6 @@ def create_demo():
                     model_selector,
                     use_cache,
                 ) = UIComponents.create_llm_settings(defaults, available_models, args.model)
-
-                # Add example prompts
-                gr.Examples(
-                    examples=[[prompt] for prompt in defaults["example_prompts"]],
-                    inputs=user_input,
-                )
-
-                # Evidence Panel - shows links from most recent message only
-                with gr.Accordion("Evidence References", open=True):
-                    gr.Markdown("*Evidence links will appear here when the LLM provides citations.*")
-                    evidence_buttons_container = gr.Column(visible=False)
-                    
-                    # Dynamic evidence buttons (initially empty)
-                    evidence_buttons = {}
-                    for i in range(10):  # Pre-create up to 10 evidence buttons
-                        evidence_buttons[f"btn_{i}"] = gr.Button(
-                            f"Evidence {i}", 
-                            visible=False,
-                            elem_classes=["evidence-button"],
-                            size="sm"
-                        )
 
             with gr.Tab("Evidence Review", id=1):
                 gr.Markdown("## Evidence Review & Validation")
