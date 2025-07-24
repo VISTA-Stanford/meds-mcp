@@ -51,7 +51,9 @@ logging:
 
 ### 1. Apply for Access to MedAlign 
 
-> [!WARNING] The Stanford Dataset DUA prohibts sharing data with third parties including LLM API providers. We follow the [guidelines for responsible](https://physionet.org/news/post/gpt-responsible-use) use as originally outlined by PhysioNet:
+
+> [!CAUTION]
+> The Stanford Dataset DUA prohibts sharing data with third parties including LLM API providers. We follow the [guidelines for responsible](https://physionet.org/news/post/gpt-responsible-use) use as originally outlined by PhysioNet:
 > 
 > *If you are interested in using the GPT family of models, we suggest using one of the following services:*
 >
@@ -64,7 +66,9 @@ logging:
 export REDIVIS_ACCESS_TOKEN="your_redivis_api_key_here"
 python scripts/download_data.py medalign --files
 ```
-> [!TIP] **Tumor Board Patients in MedAlign**
+
+> [!TIP] 
+> **Tumor Board Patients in MedAlign**
 > 
 > These patients' records make mention of "tumor board".
 > 
