@@ -61,9 +61,16 @@ logging:
 > - *Anthropic Claude. Claude does not use your prompts or its responses as data to train its models by default, and routine human review of data is not performed.*
 
 ```bash
-export REDIVIS_ACCESS_TOKEN="your_token_here"
+export REDIVIS_ACCESS_TOKEN="your_redivis_api_key_here"
 python scripts/download_data.py medalign --files
 ```
+> [!TIP] **Tumor Board Patients in MedAlign**
+> 
+> These patients' records make mention of "tumor board".
+> 
+> `125718675`, `126035422`, `126061094`, `126394715`, `126467596`, `127672063`, `127807353`, `127850729`, `127969918`, `127980943`, `128126942`
+
+
 
 ### 2. Initalize and Launch the MCP Server
 
@@ -74,8 +81,16 @@ python src/meds_mcp/server/main.py \
 
 ### 3. Launch Gradio Chat Demo
 
+LLM performance for evidence citation varies wildly. You should use the latest frontier LLM available to you. Suggested LLMs available at Stanford:
+
+- `apim:claude-3.7`
+- `apim:o3-mini`
+- `nero:gemini-2.5-pro` (requires GCP/Nero Vertex API)
+
 ```bash
-python examples/mcp_chat_demo/demo.py \
---model "apim:gpt-4o-mini" \
---mcp_url "http://localhost:8000/mcp"
+export VAULT_SECRET_KEY="your_apim_key_here"
+python examples/mcp_chat_demo/evidence_review_demo.py \
+--model apim:o3-mini \
+--mcp_url "http://localhost:8000/mcp" \
+--patient_id 127672063
 ```
