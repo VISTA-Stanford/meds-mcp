@@ -27,6 +27,7 @@ import logging
 import re
 import json
 import asyncio
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 # Add current directory to path for local imports
@@ -54,20 +55,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global storage for user feedback on chat messages
+chat_feedback = {}
+
 
 # Evidence retrieval functions are imported from chat.mcp_client.client
 # Evidence extraction is now handled in chat.llm.chat.py and stored in session_state.last_evidence_data
 
 
 def process_citations_in_response(response: str, evidence_data: Dict[str, List[str]]):
-    """Replace [[event_id]] citations with clickable evidence buttons."""
+    """Replace [[event_id]] citations with styled HTML links."""
     # Pattern to match [[event_id]] citations
     citation_pattern = r'\[\[([^\]]+)\]\]'
     
     def replace_citation(match):
         event_id = match.group(1)
-        # Return just the event_id - we'll handle the button generation separately
-        return f"[{event_id}]"
+        # Create a styled link that matches the timeline blue theme
+        return f'<a href="#" style="color: #1F78B4; text-decoration: underline; font-weight: 500;" onmouseover="this.style.color=\'#155A87\'" onmouseout="this.style.color=\'#1F78B4\'">[{event_id}]</a>'
     
     # Replace citations in the response text
     processed_response = re.sub(citation_pattern, replace_citation, response)
@@ -96,6 +100,66 @@ def create_evidence_panel(event_ids: List[str], evidence_data: Dict[str, List[st
         buttons.append((button_text, event_id))
     
     return buttons
+
+
+def generate_chat_download(history, current_evidence_data, current_event_ids):
+    """Generate JSON file for chat history download."""
+    try:
+        # Get patient ID and create filename
+        patient_id = session_state.current_patient_id or "unknown_patient"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{patient_id}_chat_{timestamp}.json"
+        
+        # Collect all data
+        download_data = {
+            "metadata": {
+                "patient_id": patient_id,
+                "export_timestamp": datetime.now().isoformat(),
+                "session_timestamp": session_state.query_datetime.isoformat() if session_state.query_datetime else None,
+                "total_messages": len(history),
+                "evidence_events": len(current_event_ids) if current_event_ids else 0
+            },
+            "chat_history": [],
+            "user_feedback": chat_feedback.copy(),
+            "evidence_data": current_evidence_data.copy() if current_evidence_data else {},
+            "evidence_event_ids": current_event_ids.copy() if current_event_ids else []
+        }
+        
+        # Process chat history
+        for i, message in enumerate(history):
+            chat_entry = {
+                "message_index": i,
+                "role": message.get("role", "unknown"),
+                "content": message.get("content", ""),
+                "timestamp": datetime.now().isoformat(),  # Could be enhanced to track actual message times
+                "has_user_feedback": i in chat_feedback
+            }
+            
+            # Add feedback if it exists for this message
+            if i in chat_feedback:
+                chat_entry["user_feedback"] = chat_feedback[i]
+            
+            download_data["chat_history"].append(chat_entry)
+        
+        # Create the JSON content
+        json_content = json.dumps(download_data, indent=2, ensure_ascii=False)
+        
+        # Write to temporary file for download
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+            f.write(json_content)
+            temp_path = f.name
+        
+        logger.info(f"📥 Generated chat download: {filename} ({len(json_content)} chars)")
+        return temp_path, filename
+        
+    except Exception as e:
+        logger.error(f"Error generating chat download: {e}")
+        # Return empty file on error
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump({"error": str(e)}, f)
+            return f.name, f"error_{timestamp}.json"
 
 
 def create_demo():
@@ -155,32 +219,44 @@ def create_demo():
 
                     # Evidence Panel - directly below chatbot
                     with gr.Accordion("Evidence References", open=True):
-                        gr.Markdown("*Evidence links will appear here when the LLM provides citations.*")
-                        evidence_buttons_container = gr.Column(visible=False)
+                        #gr.Markdown("*Evidence links will appear here when the LLM provides citations.*")
                         
-                        # Dynamic evidence buttons (initially empty)
-                        evidence_buttons = {}
-                        for i in range(10):  # Pre-create up to 10 evidence buttons
-                            evidence_buttons[f"btn_{i}"] = gr.Button(
-                                f"Evidence {i}", 
-                                visible=False,
-                                elem_classes=["evidence-button"],
-                                size="sm"
-                            )
+                        # Horizontal row with wrapping for evidence buttons
+                        with gr.Row(elem_id="evidence_btn_row"):
+                            evidence_buttons_container = gr.Column(visible=False)
+                            
+                            # Dynamic evidence buttons (initially empty)
+                            evidence_buttons = {}
+                            for i in range(10):  # Pre-create up to 10 evidence buttons
+                                evidence_buttons[f"btn_{i}"] = gr.Button(
+                                    f"Evidence {i}", 
+                                    visible=False,
+                                    elem_classes=["evidence-button-horizontal"],
+                                    elem_id=f"evidence_btn_{i}",
+                                    size="sm",
+                                    scale=1
+                                )
 
                     # Input row at bottom
                     with gr.Row():
-                        with gr.Column(scale=1, min_width=200):
+                        with gr.Column(scale=3, min_width=200):
                             user_input = gr.Textbox(
                                 label="Your message",
                                 placeholder="Type a message and press enter",
                             )
-                        with gr.Column(scale=1, min_width=100):
+                        with gr.Column(scale=2, min_width=100):
                             datetime_input = gr.Textbox(
                                 value="No data loaded",
                                 interactive=True,
                                 show_label=True,
                                 label="Simulated Query Timestamp",
+                            )
+                        with gr.Column(scale=1, min_width=80):
+                            download_btn = gr.DownloadButton(
+                                label="💾 Download Chat",
+                                value=None,
+                                size="sm",
+                                variant="secondary"
                             )
 
                     # Add example prompts
@@ -196,6 +272,12 @@ def create_demo():
                         logger.info(
                             f"Feedback: index={x.index}, value={x.value}, liked={x.liked}"
                         )
+                        # Store feedback globally for download
+                        chat_feedback[x.index] = {
+                            "liked": x.liked,
+                            "value": x.value,
+                            "timestamp": datetime.now().isoformat()
+                        }
 
                     chatbot.like(handle_feedback, None, None, like_user_message=True)
 
@@ -318,11 +400,26 @@ def create_demo():
             """Handle the clear event when user clicks the trash icon."""
             logger.info("🗑️ Chat history cleared by user")
             
+            # Clear feedback storage
+            global chat_feedback
+            chat_feedback.clear()
+            
             # Clear evidence buttons
             button_updates = [gr.update(visible=False) for _ in range(10)]
             container_update = gr.update(visible=False)
             
             return [[], [], {}, [], container_update] + button_updates
+
+        def handle_download(history, current_evidence_data, current_event_ids):
+            """Handle chat history download."""
+            logger.info("📥 User requested chat history download")
+            
+            if not history:
+                logger.warning("No chat history to download")
+                return None
+            
+            temp_path, filename = generate_chat_download(history, current_evidence_data, current_event_ids)
+            return temp_path
 
         def update_datetime_and_system_prompt(datetime_str: str):
             """Update both the query datetime and system prompt when datetime changes."""
@@ -548,6 +645,13 @@ def create_demo():
             outputs=clear_outputs,
         )
 
+        # Download button handler
+        download_btn.click(
+            handle_download,
+            inputs=[chatbot, current_evidence_data, current_event_ids],
+            outputs=[download_btn]
+        )
+
         # Wire up evidence buttons
         for i in range(10):
             def make_evidence_handler(button_index):
@@ -610,4 +714,55 @@ def create_demo():
 if __name__ == "__main__":
     # Create and launch the demo
     demo = create_demo()
+    
+    # Add custom CSS for horizontal wrapping evidence buttons
+    demo.load(js="""
+    function() {
+        // Add custom CSS for evidence buttons and row layout
+        const style = document.createElement('style');
+        style.textContent = `
+            /* Evidence buttons row with flex-wrap */
+            #evidence_btn_row {
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 0.5rem !important;
+                align-items: flex-start !important;
+                justify-content: flex-start !important;
+            }
+            
+            /* Individual evidence button styling */
+            .evidence-button-horizontal {
+                background: linear-gradient(45deg, #1F78B4, #3A9BC1) !important;
+                color: white !important;
+                border: none !important;
+                text-decoration: none !important;
+                cursor: pointer !important;
+                margin: 2px !important;
+                padding: 8px 16px !important;
+                border-radius: 6px !important;
+                font-size: 13px !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+                transition: all 0.2s ease !important;
+                text-align: center !important;
+                font-weight: 500 !important;
+                white-space: nowrap !important;
+                min-width: 140px !important;
+                max-width: 140px !important;
+                flex-shrink: 0 !important;
+               
+            }
+            .evidence-button-horizontal:hover {
+                background: linear-gradient(45deg, #155A87, #2E7A9B) !important;
+                transform: translateY(-1px) !important;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
+            }
+            .evidence-button-horizontal:active {
+                transform: translateY(0px) !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.15) !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    """)
+
     demo.launch(share=False, inbrowser=True) 
