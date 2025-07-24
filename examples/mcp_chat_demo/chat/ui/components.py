@@ -15,8 +15,8 @@ class UIComponents:
     def create_main_interface():
         """Create the main chat interface."""
         with gr.Accordion("Chat Interface", open=True):
-            # Timeline visualization
-            timeline_plot = gr.Plot(value=None, show_label=False)
+            # Timeline visualization (initially hidden until data is loaded)
+            timeline_plot = gr.Plot(value=None, show_label=False, visible=False)
 
             # Chat interface
             chatbot = gr.Chatbot(
@@ -79,7 +79,7 @@ class UIComponents:
     @staticmethod
     def create_patient_loading():
         """Create patient loading panel."""
-        with gr.Accordion("Load Patient Data", open=True):
+        with gr.Accordion("Load Patient Data", open=False):
             with gr.Row():
                 patient_id_input = gr.Textbox(
                     label="Patient ID",

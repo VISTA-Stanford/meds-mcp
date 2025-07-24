@@ -42,12 +42,12 @@ def load_patient_sync(patient_id: str, mcp_url: str):
                 )
                 fig = TimelineManager.update_timeline_plot()
 
-                return patient_id, message, fig, datetime_str
+                return patient_id, message, fig, datetime_str, True  # Timeline visible
             else:
-                return patient_id, message, None, "No timeline data"
+                return patient_id, message, None, "No timeline data", False  # Timeline hidden
         else:
-            return patient_id, message, None, "No data loaded"
+            return patient_id, message, None, "No data loaded", False  # Timeline hidden
 
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
-        return patient_id, f"Error: {str(e)}", None, "No data loaded"
+        return patient_id, f"Error: {str(e)}", None, "No data loaded", False  # Timeline hidden

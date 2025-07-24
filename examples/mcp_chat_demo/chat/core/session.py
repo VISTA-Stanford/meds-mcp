@@ -19,6 +19,7 @@ class SessionState:
         self.latest_timestamp: Optional[pd.Timestamp] = None
         self.query_datetime: Optional[pd.Timestamp] = None
         self.timeline_loaded: bool = False
+        self.last_evidence_data: Dict[str, List[str]] = {}
 
     def reset_patient_data(self):
         """Reset patient-specific data."""
@@ -29,6 +30,7 @@ class SessionState:
         self.latest_timestamp = None
         self.query_datetime = None
         self.timeline_loaded = False
+        self.last_evidence_data = {}
 
 
 # Global session state instance

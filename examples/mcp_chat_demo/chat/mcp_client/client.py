@@ -74,6 +74,39 @@ async def search_patient_events_simple(query: str, patient_id: str, mcp_url: str
         return []
 
 
+async def get_event_by_id(event_id: str, mcp_url: str):
+    """Get specific event by node_id from MCP server."""
+    try:
+        async with streamablehttp_client(mcp_url) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+
+                # Use the correct tool name and parameter
+                result = await session.call_tool(
+                    "get_patient_event", {"node_id": event_id}
+                )
+                event_data = result.structuredContent.get("result", {})
+                
+                if event_data:
+                    # The MCP server returns the event directly, not wrapped in success/error
+                    return True, event_data, None
+                else:
+                    return False, None, f"Event {event_id} not found"
+
+    except Exception as e:
+        logger.error(f"Error getting event {event_id}: {e}")
+        return False, None, str(e)
+
+
+def get_event_by_id_sync(event_id: str, mcp_url: str):
+    """Synchronous wrapper for get_event_by_id."""
+    return asyncio.run(get_event_by_id(event_id, mcp_url))
+
+
 def test_connection_sync(mcp_url: str):
     """Test MCP connection."""
     try:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 from typing import List, Dict, Any
+from datetime import datetime
 
 import pandas as pd
 
@@ -152,6 +153,29 @@ def pack_context_for_query(
     # Update timeline plot with highlighted events
     fig = TimelineManager.update_timeline_plot(final_events)
 
+    # Debug logging: dump the exact context being sent to LLM
+    try:
+        final_user_message = messages[-1]["content"] if messages else ""
+        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        with open("demo.log", "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"CONTEXT DEBUG LOG - {timestamp_str}\n")
+            f.write(f"Patient ID: {session_state.current_patient_id}\n")
+            f.write(f"Timeline Mode: {timeline_mode}\n")
+            f.write(f"User Query: {user_input}\n")
+            f.write(f"Events Count: {len(final_events)}\n")
+            f.write(f"Token Count: {sum(count_tokens(m['content']) for m in messages)}\n")
+            f.write(f"{'='*80}\n")
+            f.write("FINAL LLM CONTEXT:\n")
+            f.write(f"{'='*80}\n")
+            f.write(final_user_message)
+            f.write(f"\n{'='*80}\n\n")
+            
+        logger.info(f"📝 Context dumped to demo.log ({len(final_user_message)} chars)")
+    except Exception as e:
+        logger.error(f"Error writing debug log: {e}")
+
     return messages, fig
 
 
@@ -228,23 +252,64 @@ def stream_chat_response(
         try:
             import json
 
+            response_data = None
+            
+            # First, try to find JSON wrapped in code blocks
             json_match = re.search(r"```json\s*(.*?)\s*```", response, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
                 response_data = json.loads(json_str)
-                logger.info("=== Raw JSON Response ===")
+                logger.info("=== JSON Response from Code Block ===")
+            else:
+                # If no code block, try to find raw JSON object
+                brace_positions = [i for i, char in enumerate(response) if char == '{']
+                
+                for start_pos in brace_positions:
+                    json_candidate = response[start_pos:]
+                    brace_count = 0
+                    for end_pos, char in enumerate(json_candidate):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                try:
+                                    potential_json = json_candidate[:end_pos + 1]
+                                    response_data = json.loads(potential_json)
+                                    logger.info("=== Raw JSON Response ===")
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
+                    if response_data:
+                        break
+
+            if response_data:
                 logger.info(json.dumps(response_data, indent=2))
                 logger.info("=======================")
 
-                formatted_response = f"{response_data['answer']}\n\nEvidence UIDs: {', '.join(response_data['evidence'])}"
-                history.append({"role": "assistant", "content": formatted_response})
+                # Store evidence data in session state for evidence panel
+                if "evidence" in response_data and isinstance(response_data["evidence"], dict):
+                    session_state.last_evidence_data = response_data["evidence"]
+                    evidence_count = len(response_data["evidence"])
+                    logger.info(f"📋 Stored evidence for {evidence_count} events in session_state")
+                else:
+                    session_state.last_evidence_data = {}
+                    logger.info("📋 No evidence data found in response")
+
+                # Use the answer from JSON, or full response if no answer key
+                if "answer" in response_data:
+                    history.append({"role": "assistant", "content": response_data["answer"]})
+                else:
+                    history.append({"role": "assistant", "content": response})
             else:
                 # No JSON found, use raw response
+                session_state.last_evidence_data = {}
                 history.append({"role": "assistant", "content": response})
 
         except Exception as e:
             logger.error(f"Error parsing JSON response: {str(e)}")
             # Fallback to raw response
+            session_state.last_evidence_data = {}
             history.append({"role": "assistant", "content": response})
 
         return history, history, fig

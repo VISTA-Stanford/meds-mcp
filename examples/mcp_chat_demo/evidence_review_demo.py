@@ -19,6 +19,13 @@ Integration Status:
 ✅ Evidence extraction from LLM JSON responses
 ✅ Evidence panel for most recent message
 ✅ Real evidence retrieval via MCP
+
+python examples/mcp_chat_demo/evidence_review_demo.py \
+--model "nero:gemini-2.5-pro" \
+--mcp_url "http://localhost:8000/mcp" \
+--patient_id 127672063
+
+
 """
 
 import os
@@ -57,6 +64,10 @@ logger = logging.getLogger(__name__)
 
 # Global storage for user feedback on chat messages
 chat_feedback = {}
+
+# Global storage for evidence validation states
+# Format: {message_index}_{event_id}: {"status": "validated/rejected/pending", "timestamp": "...", "message_index": int}
+evidence_validations = {}
 
 
 # Evidence retrieval functions are imported from chat.mcp_client.client
@@ -108,7 +119,9 @@ def generate_chat_download(history, current_evidence_data, current_event_ids):
         # Get patient ID and create filename
         patient_id = session_state.current_patient_id or "unknown_patient"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{patient_id}_chat_{timestamp}.json"
+        # Add microseconds to ensure uniqueness
+        microseconds = datetime.now().strftime("%f")[:3]
+        filename = f"{patient_id}_chat_{timestamp}_{microseconds}.json"
         
         # Collect all data
         download_data = {
@@ -122,7 +135,8 @@ def generate_chat_download(history, current_evidence_data, current_event_ids):
             "chat_history": [],
             "user_feedback": chat_feedback.copy(),
             "evidence_data": current_evidence_data.copy() if current_evidence_data else {},
-            "evidence_event_ids": current_event_ids.copy() if current_event_ids else []
+            "evidence_event_ids": current_event_ids.copy() if current_event_ids else [],
+            "evidence_validations": evidence_validations.copy()
         }
         
         # Process chat history
@@ -132,34 +146,55 @@ def generate_chat_download(history, current_evidence_data, current_event_ids):
                 "role": message.get("role", "unknown"),
                 "content": message.get("content", ""),
                 "timestamp": datetime.now().isoformat(),  # Could be enhanced to track actual message times
-                "has_user_feedback": i in chat_feedback
+                "has_user_feedback": i in chat_feedback,
+                "evidence_validations": {}
             }
             
             # Add feedback if it exists for this message
             if i in chat_feedback:
                 chat_entry["user_feedback"] = chat_feedback[i]
             
+            # Add evidence validations for this message
+            for validation_key, validation_data in evidence_validations.items():
+                if validation_key.startswith(f"{i}_"):
+                    event_id = validation_key.split("_", 1)[1]  # Extract event_id from validation_key
+                    chat_entry["evidence_validations"][event_id] = validation_data
+            
             download_data["chat_history"].append(chat_entry)
         
         # Create the JSON content
         json_content = json.dumps(download_data, indent=2, ensure_ascii=False)
         
-        # Write to temporary file for download
+        # Write to temporary file for download with the desired filename
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+        import os
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, filename)
+        
+        # Ensure the file is properly written and closed
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(json_content)
-            temp_path = f.name
+            f.flush()  # Ensure content is written to disk
+            os.fsync(f.fileno())  # Force write to disk
         
         logger.info(f"📥 Generated chat download: {filename} ({len(json_content)} chars)")
+        logger.info(f"📋 Total evidence validations exported: {len(evidence_validations)}")
         return temp_path, filename
         
     except Exception as e:
         logger.error(f"Error generating chat download: {e}")
         # Return empty file on error
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        import os
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        error_filename = f"error_{timestamp}.json"
+        temp_dir = tempfile.gettempdir()
+        error_path = os.path.join(temp_dir, error_filename)
+        
+        with open(error_path, 'w', encoding='utf-8') as f:
             json.dump({"error": str(e)}, f)
-            return f.name, f"error_{timestamp}.json"
+        
+        return error_path, error_filename
 
 
 def create_demo():
@@ -334,6 +369,9 @@ def create_demo():
                     visible=False
                 )
                 
+                # Hidden state to track current validation key
+                current_validation_key = gr.State("")
+                
                 # Validation buttons
                 with gr.Row():
                     validate_yes_btn = gr.Button("✅ Evidence Supports Claim", variant="primary", scale=1)
@@ -400,9 +438,10 @@ def create_demo():
             """Handle the clear event when user clicks the trash icon."""
             logger.info("🗑️ Chat history cleared by user")
             
-            # Clear feedback storage
-            global chat_feedback
+            # Clear feedback and validation storage
+            global chat_feedback, evidence_validations
             chat_feedback.clear()
+            evidence_validations.clear()
             
             # Clear evidence buttons
             button_updates = [gr.update(visible=False) for _ in range(10)]
@@ -417,9 +456,23 @@ def create_demo():
             if not history:
                 logger.warning("No chat history to download")
                 return None
-            
-            temp_path, filename = generate_chat_download(history, current_evidence_data, current_event_ids)
-            return temp_path
+                
+            try:
+                temp_path, filename = generate_chat_download(history, current_evidence_data, current_event_ids)
+                
+                # Ensure file exists and is readable
+                import os
+                if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                    logger.info(f"📁 File ready for download: {temp_path} ({os.path.getsize(temp_path)} bytes)")
+                    # Return the file path - no gr.update() wrapper
+                    return temp_path
+                else:
+                    logger.error(f"❌ Generated file not found or empty: {temp_path}")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"❌ Error in download handler: {e}")
+                return None
 
         def update_datetime_and_system_prompt(datetime_str: str):
             """Update both the query datetime and system prompt when datetime changes."""
@@ -439,9 +492,19 @@ def create_demo():
                 )
                 return current_str, gr.update(visible=False), generate_system_prompt(current_str)
 
-        def load_evidence(event_id: str, evidence_data: dict):
+        def load_evidence(event_id: str, evidence_data: dict, current_history):
             """Load evidence for review using MCP."""
             logger.info(f"🔍 Loading evidence: {event_id}")
+            
+            # Get current message index (evidence is from most recent message)
+            message_index = len(current_history) - 1 if current_history else 0
+            validation_key = f"{message_index}_{event_id}"
+            
+            # Check for existing validation state
+            existing_validation = evidence_validations.get(validation_key, {})
+            initial_status = existing_validation.get("status", "Pending Review")
+            
+            logger.info(f"📋 Evidence validation key: {validation_key}, existing status: {initial_status}")
             
             try:
                 # Get event from MCP server
@@ -539,9 +602,10 @@ def create_demo():
                     return (
                         gr.update(selected=1),           # Switch to Evidence Review tab
                         event_id,                       # Update event ID display
-                        "Under Review",                 # Update validation status
+                        initial_status,                 # Update validation status (restored from memory)
                         document_html,                  # Update document viewer
-                        {event_id: snippets}           # Update evidence snippets
+                        {event_id: snippets},          # Update evidence snippets
+                        validation_key                  # Pass validation key for button handlers
                     )
                 else:
                     error_msg = error or "Event not found"
@@ -558,7 +622,8 @@ def create_demo():
                             <p><strong>Error:</strong> {error_msg}</p>
                         </div>
                         """,
-                        {}
+                        {},
+                        validation_key
                     )
                     
             except Exception as e:
@@ -574,17 +639,36 @@ def create_demo():
                         <p><strong>Exception:</strong> {str(e)}</p>
                     </div>
                     """,
-                    {}
+                    {},
+                    validation_key
                 )
 
-        def validate_evidence_positive():
+        def validate_evidence_positive(validation_key):
             """Mark evidence as supporting the claim."""
-            logger.info("✅ Evidence validated as SUPPORTING")
+            logger.info(f"✅ Evidence validated as SUPPORTING: {validation_key}")
+            
+            # Save validation state persistently
+            global evidence_validations
+            evidence_validations[validation_key] = {
+                "status": "✅ VALIDATED - Supports Claim",
+                "decision": "supports",
+                "timestamp": datetime.now().isoformat()
+            }
+            
             return "✅ VALIDATED - Supports Claim"
 
-        def validate_evidence_negative():
+        def validate_evidence_negative(validation_key):
             """Mark evidence as not supporting the claim."""
-            logger.info("❌ Evidence validated as NOT SUPPORTING")
+            logger.info(f"❌ Evidence validated as NOT SUPPORTING: {validation_key}")
+            
+            # Save validation state persistently
+            global evidence_validations
+            evidence_validations[validation_key] = {
+                "status": "❌ REJECTED - Does Not Support Claim",
+                "decision": "rejects",
+                "timestamp": datetime.now().isoformat()
+            }
+            
             return "❌ REJECTED - Does Not Support Claim"
 
         def switch_to_chat():
@@ -645,39 +729,39 @@ def create_demo():
             outputs=clear_outputs,
         )
 
-        # Download button handler
+        # Download button handler  
         download_btn.click(
             handle_download,
             inputs=[chatbot, current_evidence_data, current_event_ids],
-            outputs=[download_btn]
+            outputs=download_btn
         )
 
         # Wire up evidence buttons
         for i in range(10):
             def make_evidence_handler(button_index):
-                def evidence_handler(evidence_data, event_ids):
+                def evidence_handler(evidence_data, event_ids, current_history):
                     if button_index < len(event_ids):
                         event_id = event_ids[button_index]
-                        return load_evidence(event_id, evidence_data)
-                    return gr.update(), "", "", "", {}
+                        return load_evidence(event_id, evidence_data, current_history)
+                    return gr.update(), "", "", "", {}, ""
                 return evidence_handler
 
             evidence_buttons[f"btn_{i}"].click(
                 make_evidence_handler(i),
-                inputs=[current_evidence_data, current_event_ids],
-                outputs=[tabs, event_id_display, evidence_status, document_viewer, evidence_snippets]
+                inputs=[current_evidence_data, current_event_ids, chatbot],
+                outputs=[tabs, event_id_display, evidence_status, document_viewer, evidence_snippets, current_validation_key]
             )
 
         # Validation buttons
         validate_yes_btn.click(
             validate_evidence_positive,
-            inputs=[],
+            inputs=[current_validation_key],
             outputs=[evidence_status]
         )
 
         validate_no_btn.click(
             validate_evidence_negative,
-            inputs=[],
+            inputs=[current_validation_key],
             outputs=[evidence_status]
         )
 

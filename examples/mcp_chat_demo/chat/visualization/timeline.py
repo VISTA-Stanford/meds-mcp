@@ -125,7 +125,7 @@ def update_query_datetime(datetime_str: str):
         session_state.query_datetime = pd.to_datetime(datetime_str)
         logger.debug(f"Updated query_datetime to: {session_state.query_datetime}")
         fig = TimelineManager.update_timeline_plot()
-        return session_state.query_datetime.strftime("%Y-%m-%d %H:%M:%S"), fig
+        return session_state.query_datetime.strftime("%Y-%m-%d %H:%M:%S"), fig, True  # Timeline visible
     except (ValueError, TypeError) as e:
         logger.error(f"Error converting datetime: {str(e)}")
         current_str = (
@@ -133,4 +133,4 @@ def update_query_datetime(datetime_str: str):
             if session_state.query_datetime
             else "No data loaded"
         )
-        return current_str, None
+        return current_str, None, False  # Timeline hidden
