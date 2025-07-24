@@ -8,9 +8,11 @@ python apps/mcp_chat_demo/demo.py \
 --mcp_url "http://localhost:8000/mcp"
 
 
-python apps/mcp_chat_demo/demo.py \
---model "apim:gpt-4o-mini" \
---mcp_url "http://localhost:8000/mcp"
+python examples/mcp_chat_demo/demo.py \
+--model "nero:gemini-2.5-pro" \
+--mcp_url "http://localhost:8000/mcp" \
+--patient_id 127672063
+
 
 This demo uses an MCP server for patient data access instead of local XML files.
 The user provides a patient ID and all queries are anchored to that patient.
@@ -29,7 +31,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 # Import our modular components
-from chat.config import parse_args, get_defaults
+from chat.config import parse_args, get_defaults, generate_system_prompt
 from chat.core.session import session_state
 from chat.ui.components import UIComponents
 from chat.core.patient import load_patient_sync
@@ -87,7 +89,18 @@ def create_demo():
 
         # Event handlers - wrap functions to include required parameters
         def load_patient_wrapper(patient_id):
-            return load_patient_sync(patient_id, args.mcp_url)
+            result = load_patient_sync(patient_id, args.mcp_url)
+            # result is: (patient_id, message, fig, datetime_str, timeline_visible)
+            if len(result) >= 5:
+                patient_id, message, fig, datetime_str, timeline_visible = result
+                # Generate updated system prompt with the new datetime
+                new_system_prompt = generate_system_prompt(datetime_str)
+                logger.info(f"🤖 Updated system prompt for loaded patient with date: {datetime_str}")
+                logger.info(f"📊 Timeline visibility: {timeline_visible}")
+                return patient_id, message, gr.update(value=fig, visible=timeline_visible), datetime_str, new_system_prompt
+            else:
+                # Fallback for error cases
+                return result + (generate_system_prompt(), gr.update(visible=False))
 
         def test_connection_wrapper():
             return test_connection_sync(args.mcp_url)
@@ -101,11 +114,36 @@ def create_demo():
             logger.info("🗑️ Chat history cleared by user")
             return [], []  # Clear both chatbot display and state
 
+        def update_datetime_and_system_prompt(datetime_str: str):
+            """Update both the query datetime and system prompt when datetime changes."""
+            try:
+                # Update the datetime (using existing function)
+                updated_datetime, fig, timeline_visible = update_query_datetime(datetime_str)
+                
+                # Generate new system prompt with the updated date
+                new_system_prompt = generate_system_prompt(updated_datetime)
+                
+                logger.info(f"📅 Updated datetime to: {updated_datetime}")
+                logger.info(f"🤖 Updated system prompt with date: {updated_datetime}")
+                logger.info(f"📊 Timeline visibility: {timeline_visible}")
+                
+                return updated_datetime, gr.update(value=fig, visible=timeline_visible), new_system_prompt
+                
+            except Exception as e:
+                logger.error(f"Error updating datetime and system prompt: {e}")
+                # Return current values on error
+                current_str = (
+                    session_state.query_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                    if session_state.query_datetime
+                    else "No data loaded"
+                )
+                return current_str, gr.update(visible=False), generate_system_prompt(current_str)
+
         # Wire up event handlers
         load_btn.click(
             load_patient_wrapper,
             inputs=[patient_id_input],
-            outputs=[patient_id_input, load_status, timeline_plot, datetime_input],
+            outputs=[patient_id_input, load_status, timeline_plot, datetime_input, system_prompt],
         )
 
         test_connection_btn.click(
@@ -133,9 +171,9 @@ def create_demo():
         )
 
         datetime_input.submit(
-            update_query_datetime,
+            update_datetime_and_system_prompt,
             inputs=[datetime_input],
-            outputs=[datetime_input, timeline_plot],
+            outputs=[datetime_input, timeline_plot, system_prompt],
         )
 
         # Clear event handler
@@ -146,22 +184,28 @@ def create_demo():
         )
 
         # Auto-load patient if provided via command line
-        if args.patient_id:
-            logger.info(f"🚀 Auto-loading patient {args.patient_id}")
-            try:
-                # Set initial patient ID
-                patient_id_input.value = args.patient_id
-                # Auto-load the patient
-                initial_result = load_patient_sync(args.patient_id, args.mcp_url)
-                if len(initial_result) >= 2:
-                    load_status.value = initial_result[1]
-                    if len(initial_result) >= 4:
-                        datetime_input.value = initial_result[3]
-                    if len(initial_result) >= 3 and initial_result[2] is not None:
-                        timeline_plot.value = initial_result[2]
-            except Exception as e:
-                logger.error(f"Error auto-loading patient: {e}")
-                load_status.value = f"Auto-load failed: {str(e)}"
+        def auto_load_patient():
+            """Auto-load patient on startup if patient_id is provided."""
+            if args.patient_id:
+                logger.info(f"🚀 Auto-loading patient {args.patient_id}")
+                try:
+                    # Use the same wrapper function as the button click
+                    result = load_patient_wrapper(args.patient_id)
+                    # result is: (patient_id, message, timeline_update, datetime_str, system_prompt)
+                    return result
+                except Exception as e:
+                    logger.error(f"Error auto-loading patient: {e}")
+                    return args.patient_id, f"Auto-load failed: {str(e)}", gr.update(visible=False), "No data loaded", generate_system_prompt()
+            else:
+                # No patient ID provided, return empty state
+                return "", "No patient specified for auto-load", gr.update(visible=False), "No data loaded", generate_system_prompt()
+
+        # Wire up auto-load on interface load
+        demo.load(
+            auto_load_patient,
+            inputs=[],
+            outputs=[patient_id_input, load_status, timeline_plot, datetime_input, system_prompt],
+        )
 
     return demo
 
