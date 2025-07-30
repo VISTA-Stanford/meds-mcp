@@ -4,9 +4,10 @@ MEDS Model Context Protocol (MCP) Server and Client
 
 ### Development Roadmap
 
-- [ ] **\[TOOL\]** Implement retriever backend supporting [faceted search](https://en.wikipedia.org/wiki/Faceted_search) (e.g., [elasticsearch](https://github.com/elastic/elasticsearch), [meilisearch](https://github.com/meilisearch/meilisearch)) for creating a single index over the STARR patient population. 
-- [ ] **\[TOOL\]** Incorporate and bake-off vector store retrievers for event/document embedding infrastructure
-- [ ] **\[TOOL\]** Support native OMOP queries via BigQuery
+- [ ] Add support for general (non-Stanford) secure LLM client wrapper, e.g., [aisuite](https://github.com/andrewyng/aisuite)
+- [ ]  Implement retriever backend supporting [faceted search](https://en.wikipedia.org/wiki/Faceted_search) (e.g., [elasticsearch](https://github.com/elastic/elasticsearch), [meilisearch](https://github.com/meilisearch/meilisearch)) for creating a single index over the STARR patient population. 
+- [ ] Bake-off vector store retrievers for event/document embeddings  vs. BM25 baseline
+- [ ] Support native OMOP queries via BigQuery
 
 ## I. Launch MCP Server
 
