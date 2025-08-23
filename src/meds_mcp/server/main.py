@@ -36,6 +36,7 @@ from meds_mcp.server.tools.ontologies import (
     get_code_metadata,
     get_ancestor_subgraph,
     get_descendant_subgraph,
+    search_codes,
 )
 from meds_mcp.server.rag.simple_storage import (
     load_patient_xml,
@@ -58,6 +59,7 @@ get_ancestor_subgraph_tool = mcp.tool("get_ancestor_subgraph")(get_ancestor_subg
 get_descendant_subgraph_tool = mcp.tool("get_descendant_subgraph")(
     get_descendant_subgraph
 )
+search_codes_tool = mcp.tool("search_codes")(search_codes)
 load_patient_xml_tool = mcp.tool("load_patient_xml")(load_patient_xml)
 load_patient_timeline_tool = mcp.tool("load_patient_timeline")(load_patient_timeline)
 get_patient_timeline_tool = mcp.tool("get_patient_timeline")(get_patient_timeline)

@@ -34,13 +34,13 @@ def initialize_athena_ontology(ontology_dir: str, use_lazy: bool = False):
     else:
         print(f"Loading Athena ontology from {ontology_dir}...")
         try:
-            # Import here to avoid circular imports
-            from meds_mcp.server.tools.ontologies import AthenaOntology
+            # Import here to avoid circular imports - use the new AthenaOntology with BM25 search
+            from meds_mcp.server.tools.athena import AthenaOntology
             
             ontology_path = Path(ontology_dir)
             if ontology_path.exists():
                 athena_ontology = AthenaOntology.load_from_parquet(str(ontology_path))
-                print("Athena ontology loaded successfully!")
+                print("Athena ontology with BM25 search loaded successfully!")
             else:
                 print(f"Warning: Athena ontology directory not found: {ontology_path}")
                 athena_ontology = None
