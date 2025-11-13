@@ -352,7 +352,7 @@ class XMLDocumentStore:
             else:
                 print(f"Loaded patient: {result['results'][0]['person_id']}")
 
-def initialize_document_store(data_dir: str, cache_dir: str = "cache") -> XMLDocumentStore:
+def initialize_document_store(data_dir: str, cache_dir: str = "cache", load_all_patients: bool = False) -> XMLDocumentStore:
     """Initialize the global document store."""
     global _document_store
 

@@ -117,7 +117,7 @@ def initialize_server(config: Dict[str, Any]):
     except Exception as e:
         logging.error(f"❌ Failed to create cache directory: {e}")
         raise
-
+    
     # Initialize document store
     if load_all_patients:
         logging.info(
