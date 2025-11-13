@@ -22,6 +22,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP
+from fastapi import FastAPI
 
 # Initialize the FastMCP instance
 mcp = FastMCP(name="meds-mcp-server")
@@ -222,8 +223,17 @@ def main():
 
     logging.info(f"Starting MEDS MCP server on {host}:{port}")
 
-    # Run the server
+    # Get the Starlette app from MCP
     app = mcp.streamable_http_app()
+
+    # Create a FastAPI app for faceted search
+    from meds_mcp.server.api import faceted_search
+
+    search_api = FastAPI()
+    search_api.include_router(faceted_search.router, prefix="/faceted-search", tags=["search"])
+    app.mount("/api", search_api)
+
+    # Run the server
     uvicorn.run(app, host=host, port=port)
 
 
