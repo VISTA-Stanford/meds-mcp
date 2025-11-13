@@ -13,14 +13,26 @@ This will create a virtual environment and install all required dependencies. Al
 
 ## Quick Start
 
-Get up and running with MEDS MCP in three steps:
+Get up and running with MEDS MCP in four steps:
 
-### 1. Download Data
+### 0. Set Environment Variables
 
-Download the MedAlign dataset using the provided script. You'll need a Redivis access token (see [Data Setup](#data-setup) for access requirements).
+Set up the required environment variables before running any commands:
 
 ```bash
 export REDIVIS_ACCESS_TOKEN="your_redivis_api_key_here"
+export VAULT_SECRET_KEY="your_apim_key_here"
+```
+
+> **Note:** 
+> - `REDIVIS_ACCESS_TOKEN`: Required for downloading MedAlign data (see [Data Setup](#data-setup) for access requirements)
+> - `VAULT_SECRET_KEY`: Required for Stanford APIM LLM access (VPN connection required)
+
+### 1. Download Data
+
+Download the MedAlign dataset using the provided script:
+
+```bash
 uv run python scripts/download_data.py medalign --files
 ```
 
@@ -36,10 +48,9 @@ The server will start on `http://localhost:8000` by default.
 
 ### 3. Launch Demo
 
-Run the Gradio chat demo to interact with patient records. Set your LLM API key and choose a patient ID:
+Run the Gradio chat demo to interact with patient records:
 
 ```bash
-export VAULT_SECRET_KEY="your_apim_key_here"
 uv run python examples/mcp_chat_demo/evidence_review_demo.py \
   --model apim:gpt-4.1-mini \
   --mcp_url "http://localhost:8000/mcp" \
@@ -69,9 +80,10 @@ The MedAlign dataset contains de-identified EHR data and requires access approva
 #### Download MedAlign Data
 
 ```bash
-export REDIVIS_ACCESS_TOKEN="your_redivis_api_key_here"
 uv run python scripts/download_data.py medalign --files
 ```
+
+> **Note:** Make sure `REDIVIS_ACCESS_TOKEN` is set in your environment (see [Quick Start](#quick-start)).
 
 > [!TIP]
 > **Tumor Board Patients in MedAlign**
@@ -149,17 +161,18 @@ uv run python scripts/test_mcp_client_sdk.py
 
 LLM performance for evidence citation varies wildly. You should use the latest frontier LLM available to you. Suggested LLMs available at Stanford:
 
-- `apim:claude-3.7`
-- `apim:o3-mini`
+- `apim:gpt-4.1-mini`
+- `apim:gemini-2.0-flash`
 - `nero:gemini-2.5-pro` (requires GCP/Nero Vertex API)
 
 ```bash
-export VAULT_SECRET_KEY="your_apim_key_here"
 uv run python examples/mcp_chat_demo/evidence_review_demo.py \
   --model apim:o3-mini \
   --mcp_url "http://localhost:8000/mcp" \
   --patient_id 127672063
 ```
+
+> **Note:** Make sure `VAULT_SECRET_KEY` is set in your environment (see [Quick Start](#quick-start)).
 
 ## Development Roadmap
 
