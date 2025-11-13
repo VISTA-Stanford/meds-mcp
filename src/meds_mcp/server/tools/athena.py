@@ -7,7 +7,18 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import networkx as nx
-from typing import Dict, Optional, Iterable, Set, Type, Any, Union
+from typing import Dict, Optional, Iterable, Set, Type, Any, Union, List, Tuple
+import re
+import pickle
+import hashlib
+
+try:
+    import bm25s
+    import Stemmer  # PyStemmer for stemming
+    HAS_BM25S = True
+    print("✅ BM25S libraries imported successfully")
+except ImportError:
+    HAS_BM25S = False
 
 
 class AthenaFileReader:
@@ -150,6 +161,12 @@ class AthenaOntology:
         self.description_map = description_map
         self.parents_map = parents_map
         self.children_map = children_map or self._build_children_map(parents_map)
+        
+        # Initialize search index (built lazily)
+        self._bm25_index = None
+        self._corpus_codes = None  # Maps corpus index to code
+        self._stemmer = None
+        self._cache_dir = None
 
     def _build_children_map(
         self, parents_map: Dict[str, Set[str]]
@@ -373,8 +390,8 @@ class AthenaOntology:
             return nx.DiGraph()
 
         # Handle vocabulary filtering
-        if vocabularies is None or vocabularies == ["*"]:
-            allowed_vocabularies = None
+        if vocabularies is None or vocabularies == ["*"] or (isinstance(vocabularies, list) and "*" in vocabularies):
+            allowed_vocabularies = None  # Allow all vocabularies
         else:
             allowed_vocabularies = set(vocabularies)
 
@@ -438,8 +455,8 @@ class AthenaOntology:
             return nx.DiGraph()
 
         # Handle vocabulary filtering
-        if vocabularies is None or vocabularies == ["*"]:
-            allowed_vocabularies = None
+        if vocabularies is None or vocabularies == ["*"] or (isinstance(vocabularies, list) and "*" in vocabularies):
+            allowed_vocabularies = None  # Allow all vocabularies
         else:
             allowed_vocabularies = set(vocabularies)
 
@@ -486,6 +503,277 @@ class AthenaOntology:
         _get_filtered_subgraph(code, visited, G)
 
         return G
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        Tokenize text for BM25 search using medical-friendly tokenization.
+        
+        Args:
+            text: Text to tokenize
+            
+        Returns:
+            List of stemmed lowercase tokens
+        """
+        if not text:
+            return []
+        
+        # Convert to lowercase and split on non-alphanumeric characters
+        tokens = re.findall(r'\b\w+\b', text.lower())
+        
+        # Apply stemming if available
+        if self._stemmer and tokens:
+            tokens = [self._stemmer.stemWord(token) for token in tokens]
+        
+        return tokens
+
+    def _get_corpus_hash(self) -> str:
+        """
+        Generate a hash of the corpus for cache invalidation.
+        
+        Returns:
+            SHA256 hash of the sorted description map
+        """
+        # Create a deterministic hash based on the corpus content
+        sorted_items = sorted(self.description_map.items())
+        corpus_str = "\n".join(f"{code}:{desc}" for code, desc in sorted_items)
+        return hashlib.sha256(corpus_str.encode('utf-8')).hexdigest()[:16]
+
+    def _get_cache_path(self, cache_dir: str = "data/cache") -> str:
+        """
+        Get the cache file path for the BM25 index.
+        
+        Args:
+            cache_dir: Directory to store cache files
+            
+        Returns:
+            Path to the cache file
+        """
+        corpus_hash = self._get_corpus_hash()
+        cache_filename = f"bm25_index_{corpus_hash}"
+        return os.path.join(cache_dir, cache_filename)
+
+    def _save_index_to_cache(self, cache_dir: str = "data/cache") -> bool:
+        """
+        Save the BM25 index to cache.
+        
+        Args:
+            cache_dir: Directory to store cache files
+            
+        Returns:
+            True if successfully saved, False otherwise
+        """
+        if not self._bm25_index or not self._corpus_codes:
+            return False
+        
+        try:
+            # Ensure cache directory exists
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            cache_path = self._get_cache_path(cache_dir)
+            
+            # Save BM25 index using bm25s built-in save
+            self._bm25_index.save(cache_path)
+            
+            # Save additional metadata
+            metadata = {
+                'corpus_codes': self._corpus_codes,
+                'corpus_hash': self._get_corpus_hash(),
+                'stemmer_available': self._stemmer is not None
+            }
+            
+            with open(f"{cache_path}_metadata.pkl", 'wb') as f:
+                pickle.dump(metadata, f)
+            
+            print(f"BM25 index cached to: {cache_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Warning: Failed to save BM25 index to cache: {e}")
+            return False
+
+    def _load_index_from_cache(self, cache_dir: str = "data/cache") -> bool:
+        """
+        Load the BM25 index from cache.
+        
+        Args:
+            cache_dir: Directory to load cache files from
+            
+        Returns:
+            True if successfully loaded, False otherwise
+        """
+        try:
+            cache_path = self._get_cache_path(cache_dir)
+            metadata_path = f"{cache_path}_metadata.pkl"
+            
+            # Check if cache files exist
+            if not os.path.exists(metadata_path):
+                return False
+            
+            # Load and verify metadata
+            with open(metadata_path, 'rb') as f:
+                metadata = pickle.load(f)
+            
+            # Verify corpus hasn't changed
+            if metadata.get('corpus_hash') != self._get_corpus_hash():
+                print("Cache invalidated: corpus has changed")
+                return False
+            
+            # Load BM25 index
+            self._bm25_index = bm25s.BM25.load(cache_path)
+            self._corpus_codes = metadata['corpus_codes']
+            
+            # Initialize stemmer if it was available when cached
+            if metadata.get('stemmer_available', False):
+                try:
+                    self._stemmer = Stemmer.Stemmer('english')
+                except:
+                    print("Warning: Stemmer was available when cached but not now")
+                    self._stemmer = None
+            
+            print(f"BM25 index loaded from cache: {cache_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Warning: Failed to load BM25 index from cache: {e}")
+            return False
+
+    def _build_search_index(self, cache_dir: str = "data/cache"):
+        """Build BM25 search index using bm25s library with caching."""
+        if not HAS_BM25S:
+            raise ImportError(
+                "bm25s library not found. Install with: pip install bm25s PyStemmer"
+            )
+        
+        if self._bm25_index is not None:
+            return  # Already built
+        
+        self._cache_dir = cache_dir
+        
+        # Try to load from cache first
+        if self._load_index_from_cache(cache_dir):
+            return
+            
+        print("Building BM25 search index using bm25s...")
+        
+        # Initialize stemmer
+        try:
+            self._stemmer = Stemmer.Stemmer('english')
+        except:
+            print("Warning: Could not initialize stemmer, using basic tokenization")
+            self._stemmer = None
+        
+        # Prepare corpus
+        codes = list(self.description_map.keys())
+        descriptions = [self.description_map[code] for code in codes]
+        
+        # Store mapping from corpus index to code
+        self._corpus_codes = codes
+        
+        # Tokenize corpus
+        tokenized_corpus = [self._tokenize(desc) for desc in descriptions]
+        
+        print(f"Tokenizing {len(descriptions)} descriptions...")
+        
+        # Build BM25 index
+        self._bm25_index = bm25s.BM25()
+        self._bm25_index.index(tokenized_corpus)
+        
+        print(f"BM25 search index built for {len(codes)} descriptions")
+        
+        # Save to cache for future use
+        self._save_index_to_cache(cache_dir)
+
+    def search_descriptions(
+        self, 
+        query: str, 
+        top_k: int = 10
+    ) -> List[Tuple[str, str, float]]:
+        """
+        Search descriptions using BM25 ranking via bm25s library.
+        
+        Args:
+            query: Search query string
+            top_k: Number of top results to return
+            
+        Returns:
+            List of tuples (code, description, score) sorted by score descending
+        """
+        if not HAS_BM25S:
+            print("Warning: bm25s library not available. Install with: pip install bm25s PyStemmer")
+            return []
+        
+        # Build index if not already built
+        self._build_search_index()
+        
+        if not query.strip():
+            return []
+        
+        # Tokenize query
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+        
+        # Use bm25s get_scores method for proper BM25 scoring
+        query_scores = self._bm25_index.get_scores(query_tokens)
+        
+        # Get top k indices
+        import numpy as np
+        top_indices = np.argsort(query_scores)[-top_k:][::-1]  # Sort descending
+        top_scores = query_scores[top_indices]
+        
+        # Convert results to our format
+        results = []
+        
+        for idx, score in zip(top_indices, top_scores):
+            idx = int(idx)
+            if 0 <= idx < len(self._corpus_codes) and score > 0:
+                code = self._corpus_codes[idx]
+                description = self.description_map[code]
+                results.append((code, description, float(score)))
+        
+        return results
+
+    def set_cache_directory(self, cache_dir: str):
+        """
+        Set the cache directory for BM25 index storage.
+        
+        Args:
+            cache_dir: Directory to store cache files
+        """
+        self._cache_dir = cache_dir
+
+    def clear_search_cache(self, cache_dir: Optional[str] = None):
+        """
+        Clear cached BM25 index files.
+        
+        Args:
+            cache_dir: Directory containing cache files (uses default if None)
+        """
+        if cache_dir is None:
+            cache_dir = self._cache_dir or "data/cache"
+        
+        try:
+            cache_path = self._get_cache_path(cache_dir)
+            metadata_path = f"{cache_path}_metadata.pkl"
+            
+            # Remove cache files if they exist
+            for file_path in [metadata_path]:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"Removed cache file: {file_path}")
+            
+            # Remove bm25s index files (they may be stored as multiple files)
+            import glob
+            cache_pattern = f"{cache_path}*"
+            for file_path in glob.glob(cache_pattern):
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    print(f"Removed cache file: {file_path}")
+            
+            print(f"Search cache cleared from: {cache_dir}")
+            
+        except Exception as e:
+            print(f"Warning: Failed to clear search cache: {e}")
 
     def get_code_metadata(self, code: str) -> Dict[str, Any]:
         """
@@ -550,3 +838,21 @@ if __name__ == "__main__":
         print(f"  {code}: {metadata}")
         if i >= 2:  # Show only first 3
             break
+    
+    # Test search functionality with caching
+    print("\n=== Testing Search Functionality with Caching ===")
+    if HAS_BM25S:
+        search_queries = ["blood pressure", "malignant neoplasm", "diabetes"]
+        
+        for query in search_queries:
+            print(f"\nSearching for: '{query}'")
+            results = ontology.search_descriptions(query, top_k=5)
+            
+            if results:
+                print(f"Found {len(results)} results:")
+                for i, (code, description, score) in enumerate(results):
+                    print(f"  {i+1}. {code}: {description[:80]}... (score: {score:.3f})")
+            else:
+                print("  No results found")
+    else:
+        print("bm25s library not installed. Install with: pip install bm25s PyStemmer")
