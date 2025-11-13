@@ -53,8 +53,9 @@ from chat.core.patient import load_patient_sync
 from chat.visualization.timeline import update_query_datetime
 from chat.llm.chat import stream_chat_response
 from chat.mcp_client.client import test_connection_sync, get_event_by_id_sync
-from lumia.engines import get_llm_client, get_available_models
+from chat.llm.secure_llm_client import get_llm_client, get_available_models
 from chat.llm.cache import LLMCache
+from chat.utils.vpn_check import check_vpn_combined
 
 # Set up logging
 logging.basicConfig(
@@ -796,6 +797,26 @@ def create_demo():
 
 
 if __name__ == "__main__":
+    # Check VPN connectivity before launching
+    print("=" * 60)
+    print("Checking Stanford VPN connectivity...")
+    print("=" * 60)
+    
+    vpn_connected, vpn_message = check_vpn_combined()
+    print(vpn_message)
+    print()
+    
+    if not vpn_connected:
+        print("⚠️  WARNING: Not connected to Stanford VPN")
+        print("   This application requires VPN access to Stanford services.")
+        print("   Some features may not work correctly without VPN.")
+        print()
+        response = input("Continue anyway? (y/N): ").strip().lower()
+        if response != 'y':
+            print("Exiting. Please connect to Stanford VPN and try again.")
+            sys.exit(1)
+        print()
+    
     # Create and launch the demo
     demo = create_demo()
     

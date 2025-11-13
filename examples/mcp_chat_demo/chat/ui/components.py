@@ -133,9 +133,11 @@ class UIComponents:
                 )
             with gr.Row():
                 model_selector = gr.Dropdown(
-                    choices=[f"{model}" for model in available_models],
+                    choices=[f"{model}" for model in available_models] if available_models else None,
                     value=default_model,
                     label="Model",
+                    allow_custom_value=True,
+                    info="Enter any model identifier (e.g., apim:gpt-4.1-mini, nero:gemini-2.0-flash)" if not available_models else None,
                 )
                 use_cache = gr.Checkbox(
                     label="Use Response Cache",
