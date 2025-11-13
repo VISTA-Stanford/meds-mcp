@@ -1,6 +1,9 @@
 # MEDS MCP
 MEDS Model Context Protocol (MCP) Server and Client
 
+> [!WARNING]
+> **LLM Client Library**: This repository uses `secure-llm`, a private library for invoking secure LLM calls through Stanford's infrastructure. The `secure-llm` library follows the same API interface as [aisuite](https://github.com/andrewyng/aisuite), so extending this codebase to work with other approved LLM providers is technically feasible, but **not currently implemented**. PRs welcome. All demos currently require Stanford VPN connectivity and appropriate API credentials.
+
 ## Prerequisites
 
 This project uses [uv](https://github.com/astral-sh/uv) for dependency management. Install uv if you haven't already and sync the project dependencies:
