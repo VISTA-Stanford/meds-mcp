@@ -1050,3 +1050,46 @@ def create_lazy_ontology(
         code_metadata=code_metadata,
         ignore_invalid=ignore_invalid,
     )
+
+
+async def search_codes(query: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Search medical codes using natural language queries.
+    
+    Args:
+        query: Search query string (e.g., "blood pressure", "diabetes")
+        limit: Maximum number of results to return (default: 10)
+        
+    Returns:
+        Dictionary with search results including codes, descriptions, and scores
+    """
+    ontology = get_ontology()
+    if ontology is None:
+        return {"error": "Athena ontology not loaded"}
+    
+    # Check if search functionality is available
+    if not hasattr(ontology, 'search_descriptions'):
+        return {"error": "Search functionality not available. Install with: pip install bm25s PyStemmer"}
+    
+    try:
+        # Perform search using BM25
+        results = ontology.search_descriptions(query, top_k=limit)
+        
+        # Convert to standardized format
+        search_results = []
+        for code, description, score in results:
+            search_results.append({
+                "code": code,
+                "description": description,
+                "vocabulary": code.split("/")[0] if "/" in code else "Unknown",
+                "score": score
+            })
+        
+        return {
+            "query": query,
+            "result_count": len(search_results),
+            "results": search_results
+        }
+        
+    except Exception as e:
+        return {"error": f"Search failed: {str(e)}"}

@@ -1,0 +1,6 @@
+# Ignore all files in the data directory
+*
+
+# But keep this .gitignore file itself tracked
+!.gitignore
+

@@ -23,54 +23,7 @@ from pathlib import Path
 from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP
 
-# Initialize the FastMCP instance
-mcp = FastMCP(name="meds-mcp-server")
-
-# Import all tool functions
-from meds_mcp.server.tools.search import (
-    search_patient_events,
-    get_events_by_type,
-    get_historical_values,
-)
-from meds_mcp.server.tools.ontologies import (
-    get_code_metadata,
-    get_ancestor_subgraph,
-    get_descendant_subgraph,
-    search_codes,
-)
-from meds_mcp.server.rag.simple_storage import (
-    load_patient_xml,
-    load_patient_timeline,
-    get_patient_timeline,
-    get_patient_event,
-    list_patients,
-    get_document_store_stats,
-    list_all_node_ids,
-    list_patient_node_ids,
-    get_all_patient_events,
-)
-
-# Register all tools with decorators
-search_patient_events_tool = mcp.tool("search_patient_events")(search_patient_events)
-get_events_by_type_tool = mcp.tool("get_events_by_type")(get_events_by_type)
-get_historical_values_tool = mcp.tool("get_historical_values")(get_historical_values)
-get_code_metadata_tool = mcp.tool("get_code_metadata")(get_code_metadata)
-get_ancestor_subgraph_tool = mcp.tool("get_ancestor_subgraph")(get_ancestor_subgraph)
-get_descendant_subgraph_tool = mcp.tool("get_descendant_subgraph")(
-    get_descendant_subgraph
-)
-search_codes_tool = mcp.tool("search_codes")(search_codes)
-load_patient_xml_tool = mcp.tool("load_patient_xml")(load_patient_xml)
-load_patient_timeline_tool = mcp.tool("load_patient_timeline")(load_patient_timeline)
-get_patient_timeline_tool = mcp.tool("get_patient_timeline")(get_patient_timeline)
-get_patient_event_tool = mcp.tool("get_patient_event")(get_patient_event)
-list_patients_tool = mcp.tool("list_patients")(list_patients)
-get_document_store_stats_tool = mcp.tool("get_document_store_stats")(
-    get_document_store_stats
-)
-list_all_node_ids_tool = mcp.tool("list_all_node_ids")(list_all_node_ids)
-list_patient_node_ids_tool = mcp.tool("list_patient_node_ids")(list_patient_node_ids)
-get_all_patient_events_tool = mcp.tool("get_all_patient_events")(get_all_patient_events)
+# Tool imports will be done in main() to avoid import-time issues
 
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
@@ -212,8 +165,57 @@ def main():
     # Load configuration
     config = load_config(args.config)
 
+    # Import all tool functions after config is loaded
+    from meds_mcp.server.tools.search import (
+        search_patient_events,
+        get_events_by_type,
+        get_historical_values,
+    )
+    from meds_mcp.server.tools.ontologies import (
+        get_code_metadata,
+        get_ancestor_subgraph,
+        get_descendant_subgraph,
+        search_codes,
+    )
+    from meds_mcp.server.rag.simple_storage import (
+        load_patient_xml,
+        load_patient_timeline,
+        get_patient_timeline,
+        get_patient_event,
+        list_patients,
+        get_document_store_stats,
+        list_all_node_ids,
+        list_patient_node_ids,
+        get_all_patient_events,
+    )
+
     # Initialize server components
     initialize_server(config)
+
+    # Initialize the FastMCP instance after config is loaded
+    mcp = FastMCP(name="meds-mcp-server")
+
+    # Register all tools with decorators
+    search_patient_events_tool = mcp.tool("search_patient_events")(search_patient_events)
+    get_events_by_type_tool = mcp.tool("get_events_by_type")(get_events_by_type)
+    get_historical_values_tool = mcp.tool("get_historical_values")(get_historical_values)
+    get_code_metadata_tool = mcp.tool("get_code_metadata")(get_code_metadata)
+    get_ancestor_subgraph_tool = mcp.tool("get_ancestor_subgraph")(get_ancestor_subgraph)
+    get_descendant_subgraph_tool = mcp.tool("get_descendant_subgraph")(
+        get_descendant_subgraph
+    )
+    search_codes_tool = mcp.tool("search_codes")(search_codes)
+    load_patient_xml_tool = mcp.tool("load_patient_xml")(load_patient_xml)
+    load_patient_timeline_tool = mcp.tool("load_patient_timeline")(load_patient_timeline)
+    get_patient_timeline_tool = mcp.tool("get_patient_timeline")(get_patient_timeline)
+    get_patient_event_tool = mcp.tool("get_patient_event")(get_patient_event)
+    list_patients_tool = mcp.tool("list_patients")(list_patients)
+    get_document_store_stats_tool = mcp.tool("get_document_store_stats")(
+        get_document_store_stats
+    )
+    list_all_node_ids_tool = mcp.tool("list_all_node_ids")(list_all_node_ids)
+    list_patient_node_ids_tool = mcp.tool("list_patient_node_ids")(list_patient_node_ids)
+    get_all_patient_events_tool = mcp.tool("get_all_patient_events")(get_all_patient_events)
 
     # Get server settings from config
     server_config = config.get("server", {})
