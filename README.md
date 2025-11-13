@@ -41,7 +41,7 @@ Run the Gradio chat demo to interact with patient records. Set your LLM API key 
 ```bash
 export VAULT_SECRET_KEY="your_apim_key_here"
 uv run python examples/mcp_chat_demo/evidence_review_demo.py \
-  --model apim:o3-mini \
+  --model apim:gpt-4.1-mini \
   --mcp_url "http://localhost:8000/mcp" \
   --patient_id 127672063
 ```

@@ -38,7 +38,7 @@ from chat.core.patient import load_patient_sync
 from chat.visualization.timeline import update_query_datetime
 from chat.llm.chat import stream_chat_response
 from chat.mcp_client.client import test_connection_sync
-from lumia.engines import get_llm_client, get_available_models
+from chat.llm.secure_llm_client import get_llm_client, get_available_models
 from chat.llm.cache import LLMCache
 
 # Set up logging

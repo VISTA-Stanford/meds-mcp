@@ -14,7 +14,7 @@ from chat.utils.tokens import count_tokens
 from chat.core.session import session_state
 from chat.visualization.timeline import TimelineManager
 from chat.mcp_client.client import search_patient_events_simple
-from lumia.engines import get_llm_client, get_default_generation_config
+from chat.llm.secure_llm_client import get_llm_client, extract_response_content
 
 logger = logging.getLogger(__name__)
 
@@ -198,10 +198,8 @@ def stream_chat_response(
     if history is None:
         history = []
 
-    # Update LLM client if model changed
-    if model_name != llm_client.model_name:
-        logger.info(f"Switching LLM model from {llm_client.model_name} to {model_name}")
-        llm_client = get_llm_client(model_name)
+    # Note: Model is specified per-request, not per-client
+    # No need to switch clients when model changes
 
     # Pack context
     try:
@@ -228,23 +226,23 @@ def stream_chat_response(
     # Add user message to history
     history.append({"role": "user", "content": user_input})
 
-    # Create generation config
-    generation_config = get_default_generation_config(
-        {
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": max_tokens,
-            # Note: max_input_length is used locally for context truncation, not sent to LLM API
-        }
-    )
-
     try:
-        # Generate response using vanilla generate method
+        # Generate response using secure-llm's native API
         logger.info("🤖 Generating response...")
-        response = llm_client.generate(
+        response = llm_client.chat.completions.create(
+            model=model_name,
             messages=messages,
-            generation_config=generation_config,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
         )
+
+        # Extract content from response using centralized function
+        try:
+            response_text = extract_response_content(response)
+        except ValueError as e:
+            logger.error(f"Error extracting response content: {e}")
+            response_text = "[Error: Could not extract response content]"
 
         logger.info("✅ Response generated successfully")
 
@@ -255,17 +253,17 @@ def stream_chat_response(
             response_data = None
             
             # First, try to find JSON wrapped in code blocks
-            json_match = re.search(r"```json\s*(.*?)\s*```", response, re.DOTALL)
+            json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1)
                 response_data = json.loads(json_str)
                 logger.info("=== JSON Response from Code Block ===")
             else:
                 # If no code block, try to find raw JSON object
-                brace_positions = [i for i, char in enumerate(response) if char == '{']
+                brace_positions = [i for i, char in enumerate(response_text) if char == '{']
                 
                 for start_pos in brace_positions:
-                    json_candidate = response[start_pos:]
+                    json_candidate = response_text[start_pos:]
                     brace_count = 0
                     for end_pos, char in enumerate(json_candidate):
                         if char == '{':
@@ -300,17 +298,17 @@ def stream_chat_response(
                 if "answer" in response_data:
                     history.append({"role": "assistant", "content": response_data["answer"]})
                 else:
-                    history.append({"role": "assistant", "content": response})
+                    history.append({"role": "assistant", "content": response_text})
             else:
                 # No JSON found, use raw response
                 session_state.last_evidence_data = {}
-                history.append({"role": "assistant", "content": response})
+                history.append({"role": "assistant", "content": response_text})
 
         except Exception as e:
             logger.error(f"Error parsing JSON response: {str(e)}")
             # Fallback to raw response
             session_state.last_evidence_data = {}
-            history.append({"role": "assistant", "content": response})
+            history.append({"role": "assistant", "content": response_text})
 
         return history, history, fig
 
