@@ -2,21 +2,47 @@
 Faceted search API for patient data using MeiliSearch.
 """
 import json
+import logging
 from typing import List, Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from meds_mcp.server.tools.meilisearch_client import MCPMeiliSearch
 
-router = APIRouter()
-searcher = MCPMeiliSearch()
+logger = logging.getLogger(__name__)
 
-searcher.index.update_settings({
-    "filterableAttributes": [
-        "encounter_count",
-        "gender", "age", "age_range", "race", "ethnicity",
-        "diagnosis_codes", "medication_codes", "insurance_type", "departments"
-    ],
-    "sortableAttributes": ["age", "encounter_count"],
-})
+router = APIRouter()
+
+# Lazy initialization of Meilisearch - only connect when needed
+_searcher = None
+_meilisearch_available = False
+
+def get_searcher():
+    """Get or initialize Meilisearch searcher. Returns None if Meilisearch is not available."""
+    global _searcher, _meilisearch_available
+    
+    if _searcher is not None:
+        return _searcher
+    
+    if not _meilisearch_available:
+        try:
+            _searcher = MCPMeiliSearch()
+            _searcher.index.update_settings({
+                "filterableAttributes": [
+                    "encounter_count",
+                    "gender", "age", "age_range", "race", "ethnicity",
+                    "diagnosis_codes", "medication_codes", "insurance_type", "departments"
+                ],
+                "sortableAttributes": ["age", "encounter_count"],
+            })
+            _meilisearch_available = True
+            logger.info("✅ Meilisearch connected successfully")
+            return _searcher
+        except Exception as e:
+            logger.warning(f"⚠️  Meilisearch not available: {e}")
+            logger.warning("   Faceted search API will be disabled. Start Meilisearch server to enable it.")
+            _meilisearch_available = False
+            return None
+    
+    return None
 
 @router.get("/search")
 def search_patients(
@@ -40,7 +66,15 @@ def search_patients(
 ):
     """
     Search for patients with faceted search capabilities.
+    Requires Meilisearch server to be running on localhost:7700.
     """
+    searcher = get_searcher()
+    if searcher is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Meilisearch server is not available. Please start Meilisearch on localhost:7700 to use faceted search."
+        )
+    
     filters = []
 
     # Multi-select facets
