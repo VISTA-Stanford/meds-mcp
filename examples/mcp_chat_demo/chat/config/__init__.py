@@ -40,10 +40,31 @@ RULES:
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Patient Chat with MCP Server")
+    
+    available_models = [
+        'apim:gpt-4.1', 'apim:gpt-4.1-mini', 'apim:gpt-4.1-nano', 'apim:o3-mini',
+        'apim:claude-3.5', 'apim:claude-3.7', 'apim:gemini-2.0-flash',
+        'apim:gemini-2.5-pro-preview-05-06', 'apim:llama-3.3-70b',
+        'apim:llama-4-maverick-17b', 'apim:llama-4-scout-17b', 'apim:deepseek-chat',
+        'nero:gemini-2.0-flash', 'nero:gemini-2.5-pro', 'nero:gemini-2.5-flash',
+        'nero:gemini-2.5-flash-lite'
+    ]
+    
+    model_help = (
+        "Default LLM model to use. Available models:\n"
+        "  APIM models: apim:gpt-4.1, apim:gpt-4.1-mini, apim:gpt-4.1-nano, apim:o3-mini,\n"
+        "               apim:claude-3.5, apim:claude-3.7, apim:gemini-2.0-flash,\n"
+        "               apim:gemini-2.5-pro-preview-05-06, apim:llama-3.3-70b,\n"
+        "               apim:llama-4-maverick-17b, apim:llama-4-scout-17b, apim:deepseek-chat\n"
+        "  Nero models: nero:gemini-2.0-flash, nero:gemini-2.5-pro, nero:gemini-2.5-flash,\n"
+        "               nero:gemini-2.5-flash-lite\n"
+        "  Default: apim:gpt-4o-mini"
+    )
+    
     parser.add_argument(
         "--model",
         default="apim:gpt-4o-mini",
-        help="Default LLM model to use (e.g., 'apim:gpt-4o-mini', 'apim:claude-3.5', etc.)",
+        help=model_help,
     )
     parser.add_argument(
         "--cache_dir",

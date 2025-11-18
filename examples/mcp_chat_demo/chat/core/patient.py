@@ -12,12 +12,10 @@ from chat.mcp_client.client import load_patient_data_simple
 logger = logging.getLogger(__name__)
 
 
-def load_patient_sync(patient_id: str, mcp_url: str):
-    """Load patient data synchronously using asyncio.run."""
+async def load_patient_async(patient_id: str, mcp_url: str):
+    """Load patient data asynchronously."""
     try:
-        success, message, events = asyncio.run(
-            load_patient_data_simple(patient_id, mcp_url)
-        )
+        success, message, events = await load_patient_data_simple(patient_id, mcp_url)
 
         # Reset session state
         session_state.reset_patient_data()
@@ -48,6 +46,25 @@ def load_patient_sync(patient_id: str, mcp_url: str):
         else:
             return patient_id, message, None, "No data loaded", False  # Timeline hidden
 
+    except Exception as e:
+        logger.error(f"Error loading patient: {e}")
+        return patient_id, f"Error: {str(e)}", None, "No data loaded", False  # Timeline hidden
+
+
+def load_patient_sync(patient_id: str, mcp_url: str):
+    """Load patient data synchronously using asyncio.run (for non-async contexts)."""
+    try:
+        # Check if we're in an async context
+        # get_running_loop() raises RuntimeError if no loop is running
+        try:
+            asyncio.get_running_loop()
+            # We have a running loop, so we're in async context - can't use asyncio.run()
+            raise ValueError(
+                "Cannot use load_patient_sync() in async context. Use load_patient_async() instead."
+            )
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            return asyncio.run(load_patient_async(patient_id, mcp_url))
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
         return patient_id, f"Error: {str(e)}", None, "No data loaded", False  # Timeline hidden
