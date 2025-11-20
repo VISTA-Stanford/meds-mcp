@@ -235,11 +235,9 @@ async def load_patient(request: LoadPatientRequest):
                 message="MCP URL not configured. Please check server configuration.",
             )
         
-        patient_id, message, fig, datetime_str, timeline_visible = await load_patient_async(
+        patient_id, message, fig, datetime_str, timeline_visible, success = await load_patient_async(
             request.patient_id, _mcp_url
         )
-        
-        success = timeline_visible and "Successfully" in message
         
         return LoadPatientResponse(
             success=success,
