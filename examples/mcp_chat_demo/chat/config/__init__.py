@@ -52,7 +52,7 @@ def parse_args():
     
     model_help = (
         "Default LLM model to use. Available models:\n"
-        "  APIM models: apim:gpt-4.1, apim:gpt-4.1-mini, apim:gpt-4.1-nano, apim:o3-mini,\n"
+        "  APIM models: apim:gpt-4.1, apim:gpt-4.1-mini, apim:gpt-4.1-nano, apim:o3-mini, apim:gpt-4o-mini\n"
         "               apim:claude-3.5, apim:claude-3.7, apim:gemini-2.0-flash,\n"
         "               apim:gemini-2.5-pro-preview-05-06, apim:llama-3.3-70b,\n"
         "               apim:llama-4-maverick-17b, apim:llama-4-scout-17b, apim:deepseek-chat\n"
