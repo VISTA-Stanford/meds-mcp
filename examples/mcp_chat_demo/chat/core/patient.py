@@ -21,11 +21,12 @@ NO_TIMELINE_DATA = "No timeline data"
 
 async def load_patient_async(
     patient_id: str, mcp_url: str
-) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool]:
+) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool, bool]:
     """Load patient data asynchronously.
     
     Returns:
-        Tuple containing (patient_id, message, fig, datetime_str, show_timeline)
+        Tuple containing (patient_id, message, fig, datetime_str, show_timeline, success)
+        where success is True when timeline_visible is True (non-error case with timeline data).
     """
     try:
         success, message, events = await load_patient_data_simple(patient_id, mcp_url)
@@ -52,25 +53,34 @@ async def load_patient_async(
                     "%Y-%m-%d %H:%M:%S"
                 )
                 fig = TimelineManager.update_timeline_plot()
+                timeline_visible = True
+                # Success when timeline is visible (non-error case with timeline data)
+                load_success = bool(timeline_visible)
 
-                return patient_id, message, fig, datetime_str, True  # Timeline visible
+                return patient_id, message, fig, datetime_str, timeline_visible, load_success
             else:
-                return patient_id, message, None, NO_TIMELINE_DATA, False  # Timeline hidden
+                timeline_visible = False
+                load_success = bool(timeline_visible)
+                return patient_id, message, None, NO_TIMELINE_DATA, timeline_visible, load_success
         else:
-            return patient_id, message, None, NO_DATA_LOADED, False  # Timeline hidden
+            timeline_visible = False
+            load_success = bool(timeline_visible)
+            return patient_id, message, None, NO_DATA_LOADED, timeline_visible, load_success
 
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
-        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, False  # Timeline hidden
+        timeline_visible = False
+        load_success = bool(timeline_visible)
+        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, timeline_visible, load_success
 
 
 def load_patient_sync(
     patient_id: str, mcp_url: str
-) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool]:
+) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool, bool]:
     """Load patient data synchronously using asyncio.run (for non-async contexts).
     
     Returns:
-        Tuple containing (patient_id, message, fig, datetime_str, show_timeline)
+        Tuple containing (patient_id, message, fig, datetime_str, show_timeline, success)
     """
     try:
         # Check if we're in an async context
@@ -86,4 +96,6 @@ def load_patient_sync(
             return asyncio.run(load_patient_async(patient_id, mcp_url))
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
-        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, False  # Timeline hidden
+        timeline_visible = False
+        load_success = bool(timeline_visible)
+        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, timeline_visible, load_success
