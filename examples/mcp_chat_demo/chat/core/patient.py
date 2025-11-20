@@ -4,6 +4,9 @@ Patient data management for the MCP Chat Demo.
 
 import asyncio
 import logging
+from typing import Tuple, Optional
+
+import matplotlib.figure
 
 from .session import session_state
 from chat.visualization.timeline import TimelineManager
@@ -11,9 +14,19 @@ from chat.mcp_client.client import load_patient_data_simple
 
 logger = logging.getLogger(__name__)
 
+# Constants for status messages
+NO_DATA_LOADED = "No data loaded"
+NO_TIMELINE_DATA = "No timeline data"
 
-async def load_patient_async(patient_id: str, mcp_url: str):
-    """Load patient data asynchronously."""
+
+async def load_patient_async(
+    patient_id: str, mcp_url: str
+) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool]:
+    """Load patient data asynchronously.
+    
+    Returns:
+        Tuple containing (patient_id, message, fig, datetime_str, show_timeline)
+    """
     try:
         success, message, events = await load_patient_data_simple(patient_id, mcp_url)
 
@@ -42,17 +55,23 @@ async def load_patient_async(patient_id: str, mcp_url: str):
 
                 return patient_id, message, fig, datetime_str, True  # Timeline visible
             else:
-                return patient_id, message, None, "No timeline data", False  # Timeline hidden
+                return patient_id, message, None, NO_TIMELINE_DATA, False  # Timeline hidden
         else:
-            return patient_id, message, None, "No data loaded", False  # Timeline hidden
+            return patient_id, message, None, NO_DATA_LOADED, False  # Timeline hidden
 
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
-        return patient_id, f"Error: {str(e)}", None, "No data loaded", False  # Timeline hidden
+        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, False  # Timeline hidden
 
 
-def load_patient_sync(patient_id: str, mcp_url: str):
-    """Load patient data synchronously using asyncio.run (for non-async contexts)."""
+def load_patient_sync(
+    patient_id: str, mcp_url: str
+) -> Tuple[str, str, Optional[matplotlib.figure.Figure], str, bool]:
+    """Load patient data synchronously using asyncio.run (for non-async contexts).
+    
+    Returns:
+        Tuple containing (patient_id, message, fig, datetime_str, show_timeline)
+    """
     try:
         # Check if we're in an async context
         # get_running_loop() raises RuntimeError if no loop is running
@@ -67,4 +86,4 @@ def load_patient_sync(patient_id: str, mcp_url: str):
             return asyncio.run(load_patient_async(patient_id, mcp_url))
     except Exception as e:
         logger.error(f"Error loading patient: {e}")
-        return patient_id, f"Error: {str(e)}", None, "No data loaded", False  # Timeline hidden
+        return patient_id, f"Error: {str(e)}", None, NO_DATA_LOADED, False  # Timeline hidden
