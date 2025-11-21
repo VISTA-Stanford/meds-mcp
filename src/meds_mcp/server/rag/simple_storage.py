@@ -253,39 +253,44 @@ class XMLDocumentStore:
         if not patient.nodes:
             return
 
+        num_nodes = len(patient.nodes)
+        
         # Use LlamaIndex's official persistence methods
         persist_dir = self.cache_dir / f"bm25_index_{person_id}"
 
         try:
             if persist_dir.exists():
-                print(f"Loading cached BM25 index for {person_id}")
+                print(f"  📦 Loading cached BM25 index for {person_id} ({num_nodes} events)...", flush=True, end="")
                 retriever = BM25Retriever.from_persist_dir(str(persist_dir))
                 self.bm25_retrievers[person_id] = retriever
-                print(
-                    f"✅ Loaded cached index with {len(patient.nodes)} events for patient {person_id}"
-                )
+                print(f" ✅", flush=True)
                 return
         except Exception as e:
-            print(f"Error loading cached index for {person_id}: {e}")
-            print("Recreating index...")
+            print(f" ❌ Error: {e}", flush=True)
+            print(f"  🔄 Recreating index for {person_id}...", flush=True)
 
-        # Create new retriever
-        print(f"Creating BM25 retriever for patient {person_id}")
+        # Create new retriever - this can be slow for large patients
+        print(f"  🔨 Building BM25 index for {person_id} ({num_nodes} events)...", flush=True)
+        print(f"     (This may take a while for large patients - please wait)", flush=True)
+        
+        import time
+        start_time = time.time()
+        
         retriever = BM25Retriever(
             nodes=patient.nodes, similarity_top_k=len(patient.nodes)
         )
         self.bm25_retrievers[person_id] = retriever
 
-        print(
-            f"Successfully indexed {len(patient.nodes)} events for patient {person_id}"
-        )
+        elapsed = time.time() - start_time
+        print(f"  ✅ Indexed {num_nodes} events in {elapsed:.1f}s", flush=True)
 
         # Persist the retriever using LlamaIndex's official method
         try:
+            print(f"  💾 Caching index...", flush=True, end="")
             retriever.persist(str(persist_dir))
-            print(f"✅ Cached BM25 index for {person_id}")
+            print(f" ✅", flush=True)
         except Exception as e:
-            print(f"Warning: Could not cache index for {person_id}: {e}")
+            print(f" ⚠️  Warning: Could not cache: {e}", flush=True)
 
     def get_patient_event(self, node_id: str) -> Dict[str, Any]:
         """Get a specific patient event by node ID."""
@@ -344,15 +349,21 @@ class XMLDocumentStore:
     def load_all_patients(self):
         """Scan data_dir for XML files and load each patient."""
         xml_files = list(self.data_dir.glob("*.xml"))
-        print(f"Found XML files: {xml_files}")
-        for filepath in xml_files:
+        total_files = len(xml_files)
+        print(f"\n📁 Found {total_files} XML files to load", flush=True)
+        
+        for idx, filepath in enumerate(xml_files, 1):
+            print(f"\n[{idx}/{total_files}] Loading patient from {filepath.name}...", flush=True)
             result = self.load_patient_xml(str(filepath))
             if result.get("error"):
-                print(f"Error loading {filepath}: {result['error']}")
+                print(f"❌ Error loading {filepath.name}: {result['error']}", flush=True)
             else:
-                print(f"Loaded patient: {result['results'][0]['person_id']}")
+                patient_id = result['results'][0]['person_id']
+                print(f"✅ Loaded patient {patient_id}", flush=True)
+        
+        print(f"\n✅ Finished loading {len(self.patients)} patients", flush=True)
 
-def initialize_document_store(data_dir: str, cache_dir: str = "cache") -> XMLDocumentStore:
+def initialize_document_store(data_dir: str, cache_dir: str = "cache", load_all_patients: bool = False) -> XMLDocumentStore:
     """Initialize the global document store."""
     global _document_store
 

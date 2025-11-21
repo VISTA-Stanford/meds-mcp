@@ -117,7 +117,7 @@ def initialize_server(config: Dict[str, Any]):
     except Exception as e:
         logging.error(f"❌ Failed to create cache directory: {e}")
         raise
-
+    
     # Initialize document store
     if load_all_patients:
         logging.info(
@@ -165,19 +165,41 @@ def main():
 
     # Load configuration
     config = load_config(args.config)
+    
+    # Get server settings early for startup message
+    server_config = config.get("server", {})
+    host = server_config.get("host", "0.0.0.0")
+    port = server_config.get("port", 8000)
+    
+    # Print startup message early (before slow imports)
+    print("=" * 60, flush=True)
+    print("Starting MEDS MCP Server", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Host: {host}", flush=True)
+    print(f"Port: {port}", flush=True)
+    print(f"MCP Endpoint: http://{host}:{port}/mcp", flush=True)
+    print("=" * 60, flush=True)
+    print("\nLoading modules and initializing server...", flush=True)
+    print("(This may take a moment, especially on first run)", flush=True)
+    print("Press Ctrl+C to stop the server\n", flush=True)
 
     # Import all tool functions after config is loaded
+    print("📦 Loading search tools...", flush=True)
     from meds_mcp.server.tools.search import (
         search_patient_events,
         get_events_by_type,
         get_historical_values,
     )
+    
+    print("📦 Loading ontology tools (this may take a moment)...", flush=True)
     from meds_mcp.server.tools.ontologies import (
         get_code_metadata,
         get_ancestor_subgraph,
         get_descendant_subgraph,
         search_codes,
     )
+    
+    print("📦 Loading storage tools...", flush=True)
     from meds_mcp.server.rag.simple_storage import (
         load_patient_xml,
         load_patient_timeline,
@@ -191,7 +213,9 @@ def main():
     )
 
     # Initialize server components
+    print("🚀 Initializing server components...", flush=True)
     initialize_server(config)
+    print("✅ Server components initialized", flush=True)
 
     # Initialize the FastMCP instance after config is loaded
     mcp = FastMCP(name="meds-mcp-server")
@@ -218,25 +242,34 @@ def main():
     list_patient_node_ids_tool = mcp.tool("list_patient_node_ids")(list_patient_node_ids)
     get_all_patient_events_tool = mcp.tool("get_all_patient_events")(get_all_patient_events)
 
-    # Get server settings from config
-    server_config = config.get("server", {})
-    host = server_config.get("host", "0.0.0.0")
-    port = server_config.get("port", 8000)
-
+    print("🔧 Registering MCP tools...", flush=True)
+    print("✅ All tools registered", flush=True)
+    
     logging.info(f"Starting MEDS MCP server on {host}:{port}")
+    
+    print("\n" + "=" * 60, flush=True)
+    print("✅ Server ready!", flush=True)
+    print("=" * 60, flush=True)
+    print(f"🌐 MCP endpoint: http://{host}:{port}/mcp", flush=True)
+    print(f"📊 Faceted search: http://{host}:{port}/api/faceted-search", flush=True)
+    print("=" * 60 + "\n", flush=True)
 
     # Get the Starlette app from MCP
     app = mcp.streamable_http_app()
 
-    # Create a FastAPI app for faceted search
-    from meds_mcp.server.api import faceted_search
+    # Create a FastAPI app for faceted search (optional - requires Meilisearch)
+    try:
+        from meds_mcp.server.api import faceted_search
+        search_api = FastAPI()
+        search_api.include_router(faceted_search.router, prefix="/faceted-search", tags=["search"])
+        app.mount("/api", search_api)
+        print("📊 Faceted search API enabled (requires Meilisearch)", flush=True)
+    except Exception as e:
+        print(f"⚠️  Faceted search API disabled: {e}", flush=True)
+        print("   (This is optional - MCP server will work without it)", flush=True)
 
-    search_api = FastAPI()
-    search_api.include_router(faceted_search.router, prefix="/faceted-search", tags=["search"])
-    app.mount("/api", search_api)
-
-    # Run the server
-    uvicorn.run(app, host=host, port=port)
+    # Run the server with explicit log level
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

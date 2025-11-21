@@ -90,9 +90,9 @@ def create_demo():
         # Event handlers - wrap functions to include required parameters
         def load_patient_wrapper(patient_id):
             result = load_patient_sync(patient_id, args.mcp_url)
-            # result is: (patient_id, message, fig, datetime_str, timeline_visible)
-            if len(result) >= 5:
-                patient_id, message, fig, datetime_str, timeline_visible = result
+            # result is: (patient_id, message, fig, datetime_str, timeline_visible, success)
+            if len(result) >= 6:
+                patient_id, message, fig, datetime_str, timeline_visible, success = result
                 # Generate updated system prompt with the new datetime
                 new_system_prompt = generate_system_prompt(datetime_str)
                 logger.info(f"🤖 Updated system prompt for loaded patient with date: {datetime_str}")

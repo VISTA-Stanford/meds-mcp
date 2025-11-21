@@ -162,15 +162,49 @@ uv run python scripts/test_mcp_client_sdk.py
 
 ## MCP Chat Demo
 
-LLM performance for evidence citation varies wildly. You should use the latest frontier LLM available to you. Suggested LLMs available at Stanford:
+LLM performance for evidence citation varies wildly. You should use the latest frontier LLM available to you.
 
+### Available Models
+
+**APIM Models:**
+- `apim:gpt-4.1`
 - `apim:gpt-4.1-mini`
+- `apim:gpt-4.1-nano`
+- `apim:o3-mini`
+- `apim:claude-3.5`
+- `apim:claude-3.7`
 - `apim:gemini-2.0-flash`
-- `nero:gemini-2.5-pro` (requires GCP/Nero Vertex API)
+- `apim:gemini-2.5-pro-preview-05-06`
+- `apim:llama-3.3-70b`
+- `apim:llama-4-maverick-17b`
+- `apim:llama-4-scout-17b`
+- `apim:deepseek-chat`
+
+**Nero Models** (requires GCP/Nero Vertex API):
+- `nero:gemini-2.0-flash`
+- `nero:gemini-2.5-pro`
+- `nero:gemini-2.5-flash`
+- `nero:gemini-2.5-flash-lite`
+
+**Recommended for best performance:**
+- `apim:gpt-4.1-mini` or `apim:gpt-4.1` (fast, good quality)
+- `apim:o3-mini` (latest OpenAI model)
+- `nero:gemini-2.5-pro` (best quality, requires GCP access)
+
+### Gradio Interface (Evidence Review)
 
 ```bash
 uv run python examples/mcp_chat_demo/evidence_review_demo.py \
   --model apim:o3-mini \
+  --mcp_url "http://localhost:8000/mcp" \
+  --patient_id 127672063
+```
+
+### React Interface (Lightweight Chat)
+
+```bash
+uv run python examples/mcp_chat_demo/react_chat_demo.py \
+  --model apim:gpt-4o-mini \
   --mcp_url "http://localhost:8000/mcp" \
   --patient_id 127672063
 ```

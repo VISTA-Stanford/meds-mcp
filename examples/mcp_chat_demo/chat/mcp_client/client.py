@@ -102,31 +102,54 @@ async def get_event_by_id(event_id: str, mcp_url: str):
         return False, None, str(e)
 
 
+async def test_connection_async(mcp_url: str):
+    """Test MCP connection asynchronously."""
+    try:
+        async with streamablehttp_client(mcp_url) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                return True, "✅ MCP server connection successful!"
+    except Exception as e:
+        logger.error(f"Connection test error: {e}")
+        return False, f"❌ Connection test failed: {str(e)}"
+
+
 def get_event_by_id_sync(event_id: str, mcp_url: str):
-    """Synchronous wrapper for get_event_by_id."""
-    return asyncio.run(get_event_by_id(event_id, mcp_url))
+    """Synchronous wrapper for get_event_by_id (for non-async contexts)."""
+    try:
+        # Check if we're in an async context
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, can't use asyncio.run()
+            raise RuntimeError(
+                "Cannot use get_event_by_id_sync() in async context. Use get_event_by_id() instead."
+            )
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            return asyncio.run(get_event_by_id(event_id, mcp_url))
+    except Exception as e:
+        logger.error(f"Error in get_event_by_id_sync: {e}")
+        return False, None, str(e)
 
 
 def test_connection_sync(mcp_url: str):
-    """Test MCP connection."""
+    """Synchronous wrapper for test_connection (for non-async contexts)."""
     try:
-
-        async def test_connection():
-            async with streamablehttp_client(mcp_url) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    return True
-
-        success = asyncio.run(test_connection())
-        return (
-            "✅ MCP server connection successful!"
-            if success
-            else "❌ Connection failed"
-        )
+        # Check if we're in an async context
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, can't use asyncio.run()
+            raise RuntimeError(
+                "Cannot use test_connection_sync() in async context. Use test_connection_async() instead."
+            )
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            success, message = asyncio.run(test_connection_async(mcp_url))
+            return message
     except Exception as e:
         logger.error(f"Connection test error: {e}")
         return f"❌ Connection test failed: {str(e)}"
