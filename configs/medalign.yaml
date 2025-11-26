@@ -21,4 +21,13 @@ data:
 # Logging settings
 logging:
   level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" 
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Meilisearch configuration
+meilisearch:
+  enabled: true
+  host: "http://localhost:7700"
+  index_name: "patients"
+  auto_index: true            # index corpus automatically at server startup
+  reset_on_startup: false     # wipe and rebuild index on each server start (dev only)
+  # max_patients: 10            # maximum number of patients to index (dev/testing only)
