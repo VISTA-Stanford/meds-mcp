@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import httpx
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -63,15 +64,15 @@ def set_server_args(args):
 def _initialize_server():
     """Lazy initialization - only called when needed."""
     global _llm_client, _mcp_url, _args, _initialized
-    
+
     if _initialized:
         return
-    
+
     # If args were already set externally, use them
     if _args is not None:
         _initialized = True
         return
-    
+
     # Try to initialize with command line args, but allow defaults
     try:
         _args = parse_args()
@@ -95,7 +96,7 @@ def _initialize_server():
             _llm_client = _llm_client or get_llm_client("apim:gpt-4o-mini")
         except Exception:
             _llm_client = None
-    
+
     _initialized = True
 
 
@@ -117,6 +118,21 @@ class ChatResponse(BaseModel):
     history: List[Dict[str, str]]
     evidence_data: Dict[str, List[str]]
     event_ids: List[str]
+
+class CohortChatRequest(BaseModel):
+    question: str
+    patient_ids: List[str]
+    event_query: Optional[str] = None
+    max_events_per_patient: int = 50
+    model: Optional[str] = None
+    generation_config: Optional[Dict[str, Any]] = None
+
+
+class CohortChatProxyResponse(BaseModel):
+    answer: str
+    used_patient_ids: List[str]
+    num_events_used: int
+    debug_context_size: int
 
 
 class LoadPatientRequest(BaseModel):
@@ -168,13 +184,13 @@ async def chat(request: ChatRequest):
                 status_code=500,
                 detail="LLM client not initialized. Please check server configuration."
             )
-        
+
         if not session_state.timeline_loaded or not session_state.current_patient_id:
             raise HTTPException(
                 status_code=400,
                 detail="No patient data loaded. Please load a patient first."
             )
-        
+
         # Normalize model name (remove duplicate prefixes like "apim:apim:" -> "apim:")
         model_name = request.model
         if model_name:
@@ -184,14 +200,14 @@ async def chat(request: ChatRequest):
                 # Duplicate prefix detected, remove one
                 model_name = ":".join([parts[0]] + parts[2:])
                 logger.warning(f"Normalized duplicate model prefix: {request.model} -> {model_name}")
-        
+
         # Use system prompt from request or generate default
         system_prompt = request.system_prompt or generate_system_prompt()
-        
+
         # Get defaults for prompt template
         defaults = get_defaults()
         prompt_template = defaults.get("prompt_template", "{context}\n\n{question}")
-        
+
         # Call chat function
         history, state_new, fig = stream_chat_response(
             user_input=request.message,
@@ -208,20 +224,98 @@ async def chat(request: ChatRequest):
             mcp_url=_mcp_url,
             llm_client=_llm_client,
         )
-        
+
         # Get evidence data from session state
         evidence_data = session_state.last_evidence_data or {}
         event_ids = list(evidence_data.keys()) if evidence_data else []
-        
+
         return ChatResponse(
             history=history,
             evidence_data=evidence_data,
             event_ids=event_ids,
         )
-        
+
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cohort-chat", response_model=CohortChatProxyResponse)
+async def cohort_chat_proxy(request: CohortChatRequest):
+    """
+    Proxy cohort-level chat to the meds_mcp backend's /api/cohort/cohort-chat endpoint.
+    Reuses the same model handling / config as the single-patient /api/chat endpoint.
+    """
+    _initialize_server()
+
+    # Basic validation: must have at least one patient
+    if not request.patient_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No patient_ids provided for cohort chat.",
+        )
+
+    if not _mcp_url:
+        raise HTTPException(
+            status_code=500,
+            detail="MCP URL not configured. Please check server configuration.",
+        )
+
+    # Example: mcp_url = "http://localhost:8000/mcp" -> backend_base = "http://localhost:8000"
+    if _mcp_url.endswith("/mcp"):
+        backend_base = _mcp_url[: -len("/mcp")]
+    else:
+        backend_base = _mcp_url.rsplit("/", 1)[0]
+
+    # This is the actual FastAPI cohort endpoint in meds_mcp.server.api.cohort_chat
+    cohort_url = f"{backend_base}/api/cohort/cohort-chat"
+
+    # Use default model if none provided, same logic as /api/chat
+    model_name = request.model or (_args.model if _args and _args.model else "apim:gpt-4o-mini")
+
+    # Normalize model name (remove duplicate prefixes like "apim:apim:gpt-4.1" -> "apim:gpt-4.1")
+    if model_name:
+        parts = model_name.split(":")
+        if len(parts) > 2 and parts[0] == parts[1]:
+            model_name = ":".join([parts[0]] + parts[2:])
+            logger.warning(f"Normalized duplicate model prefix in cohort chat: {request.model} -> {model_name}")
+
+    payload = {
+        "question": request.question,
+        "patient_ids": request.patient_ids,
+        "event_query": request.event_query,
+        "max_events_per_patient": request.max_events_per_patient,
+        "model": model_name,
+        "generation_config": request.generation_config,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(cohort_url, json=payload)
+
+        if resp.status_code != 200:
+            logger.error(f"Backend cohort-chat error ({resp.status_code}): {resp.text}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"Backend cohort-chat error: {resp.text}",
+            )
+
+        data = resp.json()
+        return CohortChatProxyResponse(**data)
+
+    except httpx.TimeoutException as e:
+        logger.error(f"Cohort chat timeout: {e}")
+        raise HTTPException(
+            status_code=504,
+            detail="Cohort chat backend timed out. Please try again or reduce cohort size.",
+        )
+    except Exception as e:
+        logger.error(f"Error in cohort_chat_proxy: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cohort chat failed: {str(e)}",
+        )
+
 
 
 @app.post("/api/load-patient", response_model=LoadPatientResponse)
@@ -234,18 +328,18 @@ async def load_patient(request: LoadPatientRequest):
                 success=False,
                 message="MCP URL not configured. Please check server configuration.",
             )
-        
+
         patient_id, message, fig, datetime_str, timeline_visible, success = await load_patient_async(
             request.patient_id, _mcp_url
         )
-        
+
         return LoadPatientResponse(
             success=success,
             message=message,
             patient_id=patient_id if success else None,
             datetime_str=datetime_str if success else None,
         )
-        
+
     except Exception as e:
         logger.error(f"Error loading patient: {e}", exc_info=True)
         return LoadPatientResponse(
@@ -264,14 +358,14 @@ async def get_event(event_id: str):
                 success=False,
                 error="MCP URL not configured"
             )
-        
+
         success, event_data, error = await get_event_by_id(event_id, _mcp_url)
-        
+
         if success:
             return EventDetailResponse(success=True, event=event_data)
         else:
             return EventDetailResponse(success=False, error=error or "Event not found")
-            
+
     except Exception as e:
         logger.error(f"Error getting event {event_id}: {e}")
         return EventDetailResponse(success=False, error=str(e))
@@ -284,7 +378,7 @@ async def test_connection():
     try:
         if not _mcp_url:
             return {"success": False, "message": "MCP URL not configured"}
-        
+
         success, message = await test_connection_async(_mcp_url)
         return {"success": success, "message": message}
     except Exception as e:
@@ -295,12 +389,12 @@ async def test_connection():
 async def get_patient_status():
     """Get current patient status."""
     _initialize_server()
-    
+
     # Get auto-load patient ID from args if available
     auto_load_id = None
     if _args and hasattr(_args, 'patient_id') and _args.patient_id:
         auto_load_id = _args.patient_id
-    
+
     return {
         "patient_id": session_state.current_patient_id,
         "timeline_loaded": session_state.timeline_loaded,

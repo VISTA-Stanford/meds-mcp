@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # Tool imports will be done in main() to avoid import-time issues
-
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
     """
@@ -117,7 +117,7 @@ def initialize_server(config: Dict[str, Any]):
     except Exception as e:
         logging.error(f"❌ Failed to create cache directory: {e}")
         raise
-    
+
     # Initialize document store
     if load_all_patients:
         logging.info(
@@ -150,6 +150,31 @@ def initialize_server(config: Dict[str, Any]):
     )
     initialize_athena_ontology(ontology_dir, use_lazy=use_lazy_ontology)
 
+    # Import Meilisearch tools
+    from meds_mcp.server.tools.meilisearch_tools import (
+        initialize_meilisearch_from_config,
+        )
+
+    from meds_mcp.server.indexing.index_patients import (
+        build_patient_index_from_corpus,
+        )
+
+    meili_cfg = config.get("meilisearch", {})
+    if meili_cfg.get("enabled", False):
+
+        # Initialize global MeiliSearch client for MCP tools
+        meili = initialize_meilisearch_from_config(config)
+
+        # Automatically index at startup
+        if meili and meili_cfg.get("auto_index", False):
+            build_patient_index_from_corpus(
+                data_dir=data_dir,
+                meili=meili,
+                index_name=meili.index.uid,
+                reset_index=meili_cfg.get("reset_on_startup", False),
+                max_patients=meili_cfg.get("max_patients", None),
+            )
+
 
 def main():
     """Main entry point for the server."""
@@ -165,12 +190,12 @@ def main():
 
     # Load configuration
     config = load_config(args.config)
-    
+
     # Get server settings early for startup message
     server_config = config.get("server", {})
     host = server_config.get("host", "0.0.0.0")
     port = server_config.get("port", 8000)
-    
+
     # Print startup message early (before slow imports)
     print("=" * 60, flush=True)
     print("Starting MEDS MCP Server", flush=True)
@@ -190,7 +215,7 @@ def main():
         get_events_by_type,
         get_historical_values,
     )
-    
+
     print("📦 Loading ontology tools (this may take a moment)...", flush=True)
     from meds_mcp.server.tools.ontologies import (
         get_code_metadata,
@@ -198,7 +223,7 @@ def main():
         get_descendant_subgraph,
         search_codes,
     )
-    
+
     print("📦 Loading storage tools...", flush=True)
     from meds_mcp.server.rag.simple_storage import (
         load_patient_xml,
@@ -211,6 +236,13 @@ def main():
         list_patient_node_ids,
         get_all_patient_events,
     )
+
+    print("📦 Loading Meilisearch tools...", flush=True)
+    from meds_mcp.server.tools.meilisearch_tools import (
+        search_patients,
+        reindex_patients,
+    )
+
 
     # Initialize server components
     print("🚀 Initializing server components...", flush=True)
@@ -242,11 +274,14 @@ def main():
     list_patient_node_ids_tool = mcp.tool("list_patient_node_ids")(list_patient_node_ids)
     get_all_patient_events_tool = mcp.tool("get_all_patient_events")(get_all_patient_events)
 
+    search_patients_tool = mcp.tool("search_patients")(search_patients)
+    reindex_patients_tool = mcp.tool("reindex_patients")(reindex_patients)
+
     print("🔧 Registering MCP tools...", flush=True)
     print("✅ All tools registered", flush=True)
-    
+
     logging.info(f"Starting MEDS MCP server on {host}:{port}")
-    
+
     print("\n" + "=" * 60, flush=True)
     print("✅ Server ready!", flush=True)
     print("=" * 60, flush=True)
@@ -257,16 +292,61 @@ def main():
     # Get the Starlette app from MCP
     app = mcp.streamable_http_app()
 
-    # Create a FastAPI app for faceted search (optional - requires Meilisearch)
+    # (Optional) CORS for MCP endpoints, if you ever call /mcp from the browser
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # or keep your 5500 origins, your choice
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ✅ Create a FastAPI app for our HTTP APIs
+    from meds_mcp.server.api import faceted_search
+
+    search_api = FastAPI()
+
+    # ✅ cohort React UI on :8080
+    search_api.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            # you can also add 5500 if you ever use the raw HTML + Live Server etc
+            "http://localhost:5500",
+            "http://127.0.0.1:5500",
+            # …or just use ["*"] in dev:
+            # "*",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Include routers
+    # Faceted search (Meili) – this must exist
+    search_api.include_router(
+        faceted_search.router,
+        prefix="/faceted-search",
+        tags=["search"],
+    )
+
+    # Cohort chat – optional, don't break faceted search if this import fails
     try:
-        from meds_mcp.server.api import faceted_search
-        search_api = FastAPI()
-        search_api.include_router(faceted_search.router, prefix="/faceted-search", tags=["search"])
-        app.mount("/api", search_api)
-        print("📊 Faceted search API enabled (requires Meilisearch)", flush=True)
+        from meds_mcp.server.api import cohort_chat
+
+        search_api.include_router(
+            cohort_chat.router,
+            prefix="/cohort",
+            tags=["cohort"],
+        )
+        print("📊 Faceted search & cohort API enabled (requires Meilisearch)", flush=True)
     except Exception as e:
-        print(f"⚠️  Faceted search API disabled: {e}", flush=True)
-        print("   (This is optional - MCP server will work without it)", flush=True)
+        print(f"⚠️ Cohort API disabled: {e}", flush=True)
+        print("   Faceted search API still enabled", flush=True)
+
+    # Mount all HTTP APIs under /api
+    app.mount("/api", search_api)
 
     # Run the server with explicit log level
     uvicorn.run(app, host=host, port=port, log_level="info")
