@@ -1,839 +1,1282 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MCP Chat Interface</title>
-    
-    <!-- React and ReactDOM from CDN -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
-    <!-- Babel Standalone for JSX transformation -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Marked for markdown rendering -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-                sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            background: #f5f5f5;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .app-container {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 1rem 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .header h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-        }
-        
-        .header-controls {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-        }
-        
-        .model-selector {
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            border: 1px solid rgba(255,255,255,0.3);
-            background: rgba(255,255,255,0.2);
-            color: white;
-            font-size: 0.9rem;
-            cursor: pointer;
-        }
-        
-        .model-selector option {
-            background: #667eea;
-            color: white;
-        }
-        
-        .patient-loader {
-            display: flex;
-            gap: 0.5rem;
-            align-items: center;
-        }
-        
-        .patient-input {
-            padding: 0.5rem;
-            border-radius: 6px;
-            border: 1px solid rgba(255,255,255,0.3);
-            background: rgba(255,255,255,0.2);
-            color: white;
-            font-size: 0.9rem;
-            width: 150px;
-        }
-        
-        .patient-input::placeholder {
-            color: rgba(255,255,255,0.7);
-        }
-        
-        .btn {
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            border: none;
-            cursor: pointer;
-            font-size: 0.9rem;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-        
-        .btn-primary {
-            background: rgba(255,255,255,0.9);
-            color: #667eea;
-        }
-        
-        .btn-primary:hover {
-            background: white;
-            transform: translateY(-1px);
-        }
-        
-        .status-bar {
-            background: #f8f9fa;
-            padding: 0.5rem 1.5rem;
-            border-bottom: 1px solid #e9ecef;
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-        
-        .chat-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        
-        .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-        
-        .message {
-            display: flex;
-            gap: 1rem;
-            animation: fadeIn 0.3s;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            flex-shrink: 0;
-        }
-        
-        .message-user .message-avatar {
-            background: #667eea;
-            color: white;
-        }
-        
-        .message-assistant .message-avatar {
-            background: #28a745;
-            color: white;
-        }
-        
-        .message-content {
-            flex: 1;
-            padding: 0.75rem 1rem;
-            border-radius: 12px;
-            line-height: 1.6;
-        }
-        
-        .message-user .message-content {
-            background: #e7f3ff;
-            border: 1px solid #b3d9ff;
-        }
-        
-        .message-assistant .message-content {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-        }
-        
-        .message-content p {
-            margin: 0.5rem 0;
-        }
-        
-        .message-content p:first-child {
-            margin-top: 0;
-        }
-        
-        .message-content p:last-child {
-            margin-bottom: 0;
-        }
-        
-        .citation {
-            color: #667eea;
-            text-decoration: underline;
-            cursor: pointer;
-            font-weight: 500;
-            padding: 2px 4px;
-            border-radius: 3px;
-            transition: all 0.2s;
-        }
-        
-        .citation:hover {
-            background: #e7f3ff;
-            color: #4c63d2;
-        }
-        
-        .input-area {
-            padding: 1rem 1.5rem;
-            border-top: 1px solid #e9ecef;
-            background: white;
-        }
-        
-        .input-container {
-            display: flex;
-            gap: 0.75rem;
-            align-items: flex-end;
-        }
-        
-        .input-wrapper {
-            flex: 1;
-            position: relative;
-        }
-        
-        .message-input {
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: 2px solid #dee2e6;
-            border-radius: 12px;
-            font-size: 1rem;
-            font-family: inherit;
-            resize: none;
-            min-height: 50px;
-            max-height: 150px;
-        }
-        
-        .message-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        .send-btn {
-            padding: 0.75rem 1.5rem;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .send-btn:hover:not(:disabled) {
-            background: #5568d3;
-            transform: translateY(-1px);
-        }
-        
-        .send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .event-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            animation: fadeIn 0.2s;
-        }
-        
-        .event-modal-content {
-            background: white;
-            border-radius: 12px;
-            padding: 2rem;
-            max-width: 800px;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            animation: slideUp 0.3s;
-        }
-        
-        @keyframes slideUp {
-            from { transform: translateY(20px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .event-modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 2px solid #e9ecef;
-        }
-        
-        .event-modal-header h2 {
-            color: #333;
-            font-size: 1.5rem;
-        }
-        
-        .close-btn {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: #6c757d;
-            padding: 0.5rem;
-            line-height: 1;
-        }
-        
-        .close-btn:hover {
-            color: #333;
-        }
-        
-        .event-content {
-            background: #f8f9fa;
-            padding: 1.5rem;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            margin-bottom: 1rem;
-        }
-        
-        .event-metadata {
-            color: #6c757d;
-            font-size: 0.9rem;
-            margin-bottom: 1rem;
-        }
-        
-        .event-metadata strong {
-            color: #333;
-        }
-        
-        .evidence-snippets {
-            margin-top: 1rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e9ecef;
-        }
-        
-        .evidence-snippets h3 {
-            font-size: 1rem;
-            margin-bottom: 0.5rem;
-            color: #667eea;
-        }
-        
-        .evidence-snippet {
-            background: #fff3cd;
-            padding: 0.75rem;
-            border-left: 3px solid #ffc107;
-            margin-bottom: 0.5rem;
-            border-radius: 4px;
-        }
-        
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(102, 126, 234, 0.3);
-            border-radius: 50%;
-            border-top-color: #667eea;
-            animation: spin 1s ease-in-out infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            border: 1px solid #f5c6cb;
-            margin: 1rem 1.5rem;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>MEDS Cohort Explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- React + ReactDOM (UMD) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel for JSX/ES6 in browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Marked for markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    .app-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .card-header h2,
+    .card-header h3 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+
+    .filters-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .filters-row label {
+      font-size: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    input,
+    select,
+    textarea {
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+
+    textarea {
+      resize: vertical;
+    }
+
+    button {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: #2563eb;
+      color: white;
+      font-weight: 500;
+      transition: background 0.2s ease, transform 0.1s ease;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    button:hover:not(:disabled) {
+      background: #1d4ed8;
+      transform: translateY(-1px);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.95rem;
+    }
+
+    th,
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+    }
+
+    th {
+      background: #f9fafb;
+      font-weight: 600;
+    }
+
+    tr:hover {
+      background: #f5f5f5;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      font-size: 0.75rem;
+      margin-right: 4px;
+    }
+
+    .selected-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #eef2ff;
+      font-size: 0.8rem;
+      margin: 2px;
+    }
+
+    .selected-pill button {
+      background: transparent;
+      border: none;
+      color: #4b5563;
+      padding: 0;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .answer-box {
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      line-height: 1.4;
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .small {
+      font-size: 0.8rem;
+      color: #6b7280;
+    }
+
+    .error-text {
+      font-size: 0.8rem;
+      color: #b91c1c;
+      margin-top: 4px;
+    }
+
+    .header-bar {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 16px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.12);
+    }
+
+    .header-bar h1 {
+      font-size: 1.4rem;
+      margin: 0;
+    }
+
+    .header-bar-subtitle {
+      font-size: 0.85rem;
+      margin-top: 4px;
+      opacity: 0.9;
+    }
+
+    .header-bar-right {
+      text-align: right;
+      font-size: 0.8rem;
+      opacity: 0.9;
+    }
+
+    .model-selector {
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.2);
+      color: white;
+      font-size: 0.9rem;
+      cursor: pointer;
+      margin-left: 1rem;
+    }
+
+    .model-selector option {
+      background: #667eea;
+      color: white;
+    }
+
+    .citation {
+      color: #2563eb;
+      text-decoration: underline;
+      cursor: pointer;
+      font-weight: 500;
+      padding: 2px 4px;
+      border-radius: 3px;
+      transition: all 0.2s;
+    }
+    .citation:hover {
+      background: #e5edff;
+      color: #1d4ed8;
+    }
+
+    .event-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .event-modal-content {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      max-width: 700px;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    }
+    .event-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 8px;
+    }
+    .event-modal-header h2 {
+      font-size: 1.1rem;
+      margin: 0;
+    }
+    .close-btn {
+      border: none;
+      background: transparent;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: #6b7280;
+    }
+    .close-btn:hover {
+      color: #111827;
+    }
+    .event-content-box {
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      white-space: pre-wrap;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+    .evidence-snippet {
+      background: #fef9c3;
+      border-left: 3px solid #facc15;
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      margin-bottom: 4px;
+    }
+
+    /* Chat-specific styles */
+    .chat-container {
+      display: flex;
+      flex-direction: column;
+      height: 1000px;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #f9fafb;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .message {
+      display: flex;
+      gap: 8px;
+      animation: fadeIn 0.3s;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      flex-shrink: 0;
+      font-size: 0.8rem;
+    }
+
+    .message-user .message-avatar {
+      background: #2563eb;
+      color: white;
+    }
+
+    .message-assistant .message-avatar {
+      background: #16a34a;
+      color: white;
+    }
+
+    .message-content {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 12px;
+      line-height: 1.6;
+      font-size: 1rem;
+    }
+
+    .message-user .message-content {
+      background: #dbeafe;
+      border: 1px solid #93c5fd;
+    }
+
+    .message-assistant .message-content {
+      background: #fff;
+      border: 1px solid #d1d5db;
+    }
+
+    .message-content p {
+      margin: 0.5rem 0;
+    }
+
+    .message-content p:first-child {
+      margin-top: 0;
+    }
+
+    .message-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .input-area {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .input-wrapper {
+      flex: 1;
+    }
+
+    .message-input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 1.1rem;
+      font-family: inherit;
+      resize: none;
+      min-height: 60px;
+      max-height: 180px;
+    }
+
+    .message-input:focus {
+      outline: none;
+      border-color: #2563eb;
+    }
+
+    .send-btn {
+      padding: 12px 20px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .send-btn:hover:not(:disabled) {
+      background: #1d4ed8;
+    }
+
+    .send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(37, 99, 235, 0.3);
+      border-radius: 50%;
+      border-top-color: #2563eb;
+      animation: spin 1s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
 </head>
 <body>
-    <div id="root"></div>
-    
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
-        
-        const API_BASE = window.location.origin;
-        
-        // Citation component - clickable citations in messages
-        function Citation({ eventId, onClick }) {
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // IMPORTANT: backend MCP server (port 8000)
+    const API_BASE = "http://127.0.0.1:8000/api";
+
+    // Citation component - clickable citations in messages
+    function Citation({ eventId, onClick }) {
+      return (
+        <span
+          className="citation"
+          onClick={(e) => {
+            e.preventDefault();
+            onClick(eventId);
+          }}
+          title={`Click to view event: ${eventId}`}
+        >
+          [{eventId}]
+        </span>
+      );
+    }
+
+    // Message component
+    function Message({ message, evidenceData, onCitationClick }) {
+      const isUser = message.role === 'user';
+      const content = message.content || '';
+
+      // Parse citations in format [[event_id]]
+      const citationRegex = /\[\[([^\]]+)\]\]/g;
+      const parts = [];
+      let lastIndex = 0;
+      let match;
+
+      while ((match = citationRegex.exec(content)) !== null) {
+        // Add text before citation
+        if (match.index > lastIndex) {
+          parts.push({
+            type: 'text',
+            content: content.substring(lastIndex, match.index)
+          });
+        }
+
+        // Add citation
+        parts.push({
+          type: 'citation',
+          eventId: match[1]
+        });
+
+        lastIndex = match.index + match[0].length;
+      }
+
+      // Add remaining text
+      if (lastIndex < content.length) {
+        parts.push({
+          type: 'text',
+          content: content.substring(lastIndex)
+        });
+      }
+
+      // If no citations found, use full content as text
+      if (parts.length === 0) {
+        parts.push({ type: 'text', content });
+      }
+
+      // Render content with citations
+      const renderContent = () => {
+        return parts.map((part, idx) => {
+          if (part.type === 'citation') {
             return (
-                <span 
-                    className="citation"
-                    onClick={(e) => {
-                        e.preventDefault();
-                        onClick(eventId);
-                    }}
-                    title={`Click to view event: ${eventId}`}
+              <Citation
+                key={idx}
+                eventId={part.eventId}
+                onClick={onCitationClick}
+              />
+            );
+          } else {
+            // Use marked to render markdown if available, otherwise plain text
+            if (window.marked) {
+              const html = marked.parse(part.content);
+              return (
+                <span
+                  key={idx}
+                  dangerouslySetInnerHTML={{ __html: html }}
+                />
+              );
+            } else {
+              return <span key={idx}>{part.content}</span>;
+            }
+          }
+        });
+      };
+
+      return (
+        <div className={`message message-${isUser ? 'user' : 'assistant'}`}>
+          <div className="message-avatar">
+            {isUser ? 'U' : 'AI'}
+          </div>
+          <div className="message-content">
+            {renderContent()}
+          </div>
+        </div>
+      );
+    }
+
+    // Event Modal component
+    function EventModal({ eventKey, eventData, evidenceSnippets, onClose }) {
+      if (!eventKey) return null;
+
+      const hasError = eventData && eventData.error;
+
+      return (
+        <div className="event-modal" onClick={onClose}>
+          <div
+            className="event-modal-content"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="event-modal-header">
+              <h2>Event details</h2>
+              <button className="close-btn" onClick={onClose}>
+                ×
+              </button>
+            </div>
+
+            {hasError ? (
+              <div style={{ color: "#b91c1c", fontSize: "0.9rem" }}>
+                {eventData.error}
+              </div>
+            ) : (
+              <>
+                <div className="small" style={{ marginBottom: 8 }}>
+                  <div>
+                    <strong>event_key:</strong> {eventKey}
+                  </div>
+                  {eventData && eventData.patient_id && (
+                    <div>
+                      <strong>patient_id:</strong> {eventData.patient_id}
+                    </div>
+                  )}
+                  {eventData && eventData.timestamp && (
+                    <div>
+                      <strong>timestamp:</strong> {String(eventData.timestamp)}
+                    </div>
+                  )}
+                  {eventData && eventData.type && (
+                    <div>
+                      <strong>type:</strong> {eventData.type}
+                    </div>
+                  )}
+                  {eventData && eventData.code && (
+                    <div>
+                      <strong>code:</strong> {eventData.code}
+                    </div>
+                  )}
+                </div>
+
+                <div className="event-content-box">
+                  {eventData && eventData.text
+                    ? eventData.text
+                    : "(no free-text content)"}
+                </div>
+
+                {evidenceSnippets && evidenceSnippets.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div
+                      className="small"
+                      style={{ marginBottom: 4, fontWeight: 600 }}
+                    >
+                      Evidence snippets used for this event:
+                    </div>
+                    {evidenceSnippets.map((snip, idx) => (
+                      <div key={idx} className="evidence-snippet">
+                        {snip}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+
+    function App() {
+      // Facet filters
+      const [gender, setGender] = useState("");
+      const [ageRange, setAgeRange] = useState("");
+      const [race, setRace] = useState("");
+      const [diagnosisCode, setDiagnosisCode] = useState("");
+      const [medCode, setMedCode] = useState("");
+      const [limit, setLimit] = useState(20);
+
+      // Cohort data
+      const [cohort, setCohort] = useState([]);
+      const [cohortLoading, setCohortLoading] = useState(false);
+      const [cohortError, setCohortError] = useState("");
+
+      // Selection & chat
+      const [selectedPatientIds, setSelectedPatientIds] = useState([]);
+      const [messages, setMessages] = useState([]);
+      const [inputValue, setInputValue] = useState('');
+      const [chatLoading, setChatLoading] = useState(false);
+      const [chatError, setChatError] = useState("");
+      const [eventQuery, setEventQuery] = useState("");
+      const [debugInfo, setDebugInfo] = useState(null);
+      const messagesEndRef = useRef(null);
+
+      // Model selection
+      const [models, setModels] = useState([]);
+      const [selectedModel, setSelectedModel] = useState('');
+
+      // Event index & evidence from backend
+      const [eventIndex, setEventIndex] = useState({});
+      const [evidenceData, setEvidenceData] = useState({});
+      const [selectedEventKey, setSelectedEventKey] = useState(null);
+
+      // Scroll to bottom when messages change
+      useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, [messages]);
+
+      // Load available models on mount
+      useEffect(() => {
+        console.log('Loading models from:', `${API_BASE}/models`);
+        fetch(`${API_BASE}/models`)
+          .then(res => {
+            console.log('Models API response status:', res.status);
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+            }
+            return res.json();
+          })
+          .then(data => {
+            console.log('Models data received:', data);
+            setModels(data.models || []);
+            setSelectedModel(data.default || '');
+          })
+          .catch(err => {
+            console.error('Error loading models (using fallback):', err);
+            // Set actual available Stanford Healthcare models as fallback
+            const fallbackModels = [
+              'apim:gpt-5-mini',
+              'apim:gpt-5',
+              'apim:gpt-4.1-mini',
+              'apim:gpt-4.1',
+              'apim:o3-mini',
+              'apim:claude-3.5',
+              'apim:claude-3.7',
+              'apim:gemini-2.0-flash',
+              'apim:llama-3.3-70b',
+              'apim:deepseek-chat',
+              'nero:gemini-2.0-flash',
+              'nero:gemini-2.5-pro',
+              'nero:gemini-2.5-flash'
+            ];
+            setModels(fallbackModels);
+            setSelectedModel('apim:gpt-4.1-mini'); // Good default for cohort analysis - fast and reliable
+          });
+      }, []);
+
+      // ---- Selection helpers ----
+      const toggleSelected = (pid) => {
+        setSelectedPatientIds((prev) =>
+          prev.includes(pid) ? prev.filter((x) => x !== pid) : [...prev, pid]
+        );
+      };
+
+      const clearSelection = () => {
+        setSelectedPatientIds([]);
+      };
+
+      const allSelected = cohort.length > 0 && selectedPatientIds.length === cohort.length;
+      const toggleSelectAll = () => {
+        if (allSelected) {
+          setSelectedPatientIds([]);
+        } else {
+          setSelectedPatientIds(cohort.map((p) => p.patient_id));
+        }
+      };
+
+      // ---- Backend calls ----
+
+      const searchCohort = async () => {
+        setCohortLoading(true);
+        setCohortError("");
+        setDebugInfo(null);
+
+        try {
+          const params = new URLSearchParams();
+          // Reduce default limit for faster initial results
+          params.append("limit", String(Math.min(limit || 20, 100)));
+          params.append("query", ""); // pure faceted search
+
+          // Only add filters that have values to reduce query complexity
+          if (gender?.trim()) params.append("gender", gender);
+          if (ageRange?.trim()) params.append("age_range", ageRange);
+          if (race?.trim()) params.append("race", race);
+          if (diagnosisCode?.trim()) params.append("diagnosis_code", diagnosisCode);
+          if (medCode?.trim()) params.append("medication_code", medCode);
+
+          console.log(`Searching cohort with params: ${params.toString()}`);
+
+          // Add timeout to prevent hanging
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+          const resp = await fetch(
+            `${API_BASE}/faceted-search/search?${params.toString()}`,
+            {
+              signal: controller.signal,
+              headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+
+          clearTimeout(timeoutId);
+
+          if (!resp.ok) {
+            const txt = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${txt}`);
+          }
+          const data = await resp.json();
+          console.log(`Found ${data.hits?.length || 0} patients`);
+          setCohort(data.hits || []);
+          setSelectedPatientIds([]);
+        } catch (err) {
+          console.error("Cohort search error:", err);
+          if (err.name === 'AbortError') {
+            setCohortError("Search timed out after 30 seconds. Try using more specific filters.");
+          } else {
+            setCohortError(String(err.message || err));
+          }
+        } finally {
+          setCohortLoading(false);
+        }
+      };
+
+      // Send message in chat
+      const handleSend = async () => {
+        if (!inputValue.trim() || chatLoading || selectedPatientIds.length === 0) return;
+
+        const userMessage = inputValue.trim();
+        setInputValue('');
+        setChatLoading(true);
+        setChatError("");
+
+        // Add user message to UI immediately
+        const newHistory = [...messages, { role: 'user', content: userMessage }];
+        setMessages(newHistory);
+
+        try {
+          // Limit the data sent to prevent LLM timeouts
+          const maxPatients = Math.min(selectedPatientIds.length, 5); // Limit to 5 patients max
+          const eventsPerPatient = selectedPatientIds.length > 3 ? 20 : 30; // Fewer events for more patients
+
+          const body = {
+            question: userMessage,
+            patient_ids: selectedPatientIds.slice(0, maxPatients),
+            event_query: eventQuery || null,
+            max_events_per_patient: eventsPerPatient,
+            // Only send last 3 messages for context to keep payload small
+            history: messages.slice(-3),
+            // Include model selection
+            model: selectedModel
+          };
+
+          console.log(`Sending chat request: ${maxPatients} patients, ${eventsPerPatient} events per patient`);
+
+          // Add timeout for LLM requests
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
+          const resp = await fetch(`${API_BASE}/cohort/cohort-chat`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${text}`);
+          }
+
+          const data = await resp.json();
+
+          // Add assistant response to messages
+          const assistantMessage = { role: 'assistant', content: data.answer || '' };
+          setMessages([...newHistory, assistantMessage]);
+
+          setDebugInfo({
+            used_patient_ids: data.used_patient_ids,
+            num_events_used: data.num_events_used,
+            debug_context_size: data.debug_context_size,
+          });
+
+          // Store event_index + evidence_data for modal & highlights
+          setEventIndex(data.event_index || {});
+          setEvidenceData(data.evidence_data || {});
+        } catch (err) {
+          console.error("Cohort chat error:", err);
+
+          let errorMessage = String(err.message || err);
+          let userFriendlyError = errorMessage;
+
+          // Handle specific error types
+          if (err.name === 'AbortError') {
+            userFriendlyError = "Request timed out. Try selecting fewer patients or using a more specific event filter.";
+          } else if (errorMessage.includes('504')) {
+            userFriendlyError = "LLM service timed out. Try selecting fewer patients (max 3-5) or adding an event filter to reduce data size.";
+          } else if (errorMessage.includes('apim.stanfordhealthcare.org')) {
+            userFriendlyError = "Stanford Healthcare LLM service is unavailable. Please try again later or contact support.";
+          }
+
+          setChatError(userFriendlyError);
+          // Add error message
+          setMessages([...newHistory, {
+            role: 'assistant',
+            content: `Error: ${userFriendlyError}`
+          }]);
+        } finally {
+          setChatLoading(false);
+        }
+      };
+
+      // Handle citation click
+      const handleCitationClick = async (eventId) => {
+        setSelectedEventKey(eventId);
+
+        // Check if we already have this event data
+        if (eventIndex[eventId]) {
+          return; // Modal will show existing data
+        }
+
+        // Otherwise, fetch event data (if backend supports individual event lookup)
+        try {
+          const res = await fetch(`${API_BASE}/event/${eventId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success) {
+              setEventIndex(prev => ({
+                ...prev,
+                [eventId]: data.event
+              }));
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching event data:', err);
+        }
+      };
+
+      // Clear chat messages
+      const clearChat = () => {
+        setMessages([]);
+        setDebugInfo(null);
+        setEventIndex({});
+        setEvidenceData({});
+        setChatError("");
+      };
+
+      return (
+        <div className="app-container">
+          {/* Header */}
+          <div className="header-bar">
+            <div>
+              <h1>MEDS Cohort Explorer</h1>
+              <div className="header-bar-subtitle">
+                Define a cohort via facets, select patients, and ask cohort-level questions.
+              </div>
+            </div>
+            <div className="header-bar-right">
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
+                <span style={{ marginRight: '8px' }}>Model:</span>
+                <select
+                  className="model-selector"
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
                 >
-                    [{eventId}]
-                </span>
-            );
-        }
-        
-        // Message component
-        function Message({ message, evidenceData, onCitationClick }) {
-            const isUser = message.role === 'user';
-            const content = message.content || '';
-            
-            // Parse citations in format [[event_id]]
-            const citationRegex = /\[\[([^\]]+)\]\]/g;
-            const parts = [];
-            let lastIndex = 0;
-            let match;
-            
-            while ((match = citationRegex.exec(content)) !== null) {
-                // Add text before citation
-                if (match.index > lastIndex) {
-                    parts.push({
-                        type: 'text',
-                        content: content.substring(lastIndex, match.index)
-                    });
-                }
-                
-                // Add citation
-                parts.push({
-                    type: 'citation',
-                    eventId: match[1]
-                });
-                
-                lastIndex = match.index + match[0].length;
-            }
-            
-            // Add remaining text
-            if (lastIndex < content.length) {
-                parts.push({
-                    type: 'text',
-                    content: content.substring(lastIndex)
-                });
-            }
-            
-            // If no citations found, use full content as text
-            if (parts.length === 0) {
-                parts.push({ type: 'text', content });
-            }
-            
-            // Render markdown for text parts
-            const renderContent = () => {
-                return parts.map((part, idx) => {
-                    if (part.type === 'citation') {
-                        return (
-                            <Citation
-                                key={idx}
-                                eventId={part.eventId}
-                                onClick={onCitationClick}
-                            />
-                        );
-                    } else {
-                        // Use marked to render markdown
-                        const html = marked.parse(part.content);
-                        return (
-                            <span 
-                                key={idx}
-                                dangerouslySetInnerHTML={{ __html: html }}
-                            />
-                        );
-                    }
-                });
-            };
-            
-            return (
-                <div className={`message message-${isUser ? 'user' : 'assistant'}`}>
-                    <div className="message-avatar">
-                        {isUser ? 'U' : 'AI'}
-                    </div>
-                    <div className="message-content">
-                        {renderContent()}
-                    </div>
+                  {models.length === 0 ? (
+                    <option value="">Loading models...</option>
+                  ) : (
+                    models.map(model => (
+                      <option key={model} value={model}>{model}</option>
+                    ))
+                  )}
+                </select>
+              </div>
+              <div>Backend: <code>http://127.0.0.1:8000/api</code></div>
+              <div>Frontend: {window.location.origin}</div>
+            </div>
+          </div>
+
+          {/* Cohort Filters & Results */}
+          <div className="card">
+            <div className="card-header">
+              <h3>1. Define Cohort</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button onClick={searchCohort} disabled={cohortLoading}>
+                  {cohortLoading ? (
+                    <>
+                      <span className="loading" style={{ marginRight: '6px' }}></span>
+                      Searching...
+                    </>
+                  ) : "Search"}
+                </button>
+                {cohortLoading && (
+                  <span className="small" style={{ color: '#6b7280' }}>
+                    This may take 10-30 seconds for large datasets
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="filters-row">
+              <label>
+                Gender
+                <select value={gender} onChange={(e) => setGender(e.target.value)}>
+                  <option value="">Any</option>
+                  <option value="Female">Female</option>
+                  <option value="Male">Male</option>
+                </select>
+              </label>
+
+              <label>
+                Age range
+                <select value={ageRange} onChange={(e) => setAgeRange(e.target.value)}>
+                  <option value="">Any</option>
+                  <option value="0-17">0-17</option>
+                  <option value="18-34">18-34</option>
+                  <option value="35-49">35-49</option>
+                  <option value="50-64">50-64</option>
+                  <option value="65+">65+</option>
+                </select>
+              </label>
+
+              <label>
+                Race
+                <input
+                  type="text"
+                  value={race}
+                  placeholder="e.g. White"
+                  onChange={(e) => setRace(e.target.value)}
+                />
+              </label>
+
+              <label>
+                Diagnosis code (ICD)
+                <input
+                  type="text"
+                  value={diagnosisCode}
+                  placeholder="e.g. I10"
+                  onChange={(e) => setDiagnosisCode(e.target.value)}
+                />
+              </label>
+
+              <label>
+                Medication code
+                <input
+                  type="text"
+                  value={medCode}
+                  placeholder="e.g. 197361"
+                  onChange={(e) => setMedCode(e.target.value)}
+                />
+              </label>
+
+              <label>
+                Limit (max 100)
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={limit}
+                  onChange={(e) =>
+                    setLimit(Number(e.target.value) || 20)
+                  }
+                />
+              </label>
+            </div>
+
+            {!cohortLoading && (
+              <div className="small" style={{ marginTop: 4, padding: '8px', background: '#f0f9ff', borderRadius: '4px', border: '1px solid #bfdbfe' }}>
+                💡 <strong>Performance Tips:</strong> Use specific filters (gender, age range) and lower limits for faster results.
+                Empty search queries all patients which may be slow on large datasets.
+              </div>
+            )}
+
+            {cohortError && (
+              <div className="error-text">
+                Error: {cohortError}
+              </div>
+            )}
+
+            <div className="small" style={{ marginTop: 4 }}>
+              Results: {cohort.length} patients{cohortLoading ? " (searching...)" : ""}
+            </div>
+
+            {cohort.length > 0 && (
+              <>
+                <div style={{ marginTop: 8, marginBottom: 4 }}>
+                  <button
+                    onClick={toggleSelectAll}
+                    style={{ marginRight: 8 }}
+                  >
+                    {allSelected ? "Deselect all" : "Select all"}
+                  </button>
+                  <button
+                    onClick={clearSelection}
+                    disabled={selectedPatientIds.length === 0}
+                  >
+                    Clear selection
+                  </button>
+                  <span className="small" style={{ marginLeft: 8 }}>
+                    Selected: {selectedPatientIds.length}
+                  </span>
                 </div>
-            );
-        }
-        
-        // Event Modal component
-        function EventModal({ eventId, eventData, evidenceSnippets, onClose }) {
-            if (!eventData) {
-                return (
-                    <div className="event-modal" onClick={onClose}>
-                        <div className="event-modal-content" onClick={(e) => e.stopPropagation()}>
-                            <div className="event-modal-header">
-                                <h2>Event Details</h2>
-                                <button className="close-btn" onClick={onClose}>×</button>
-                            </div>
-                            <div className="error">Loading event data...</div>
-                        </div>
-                    </div>
-                );
-            }
-            
-            const content = eventData.content || 'No content available';
-            const metadata = eventData.metadata || {};
-            const timestamp = metadata.timestamp || 'Unknown';
-            
-            return (
-                <div className="event-modal" onClick={onClose}>
-                    <div className="event-modal-content" onClick={(e) => e.stopPropagation()}>
-                        <div className="event-modal-header">
-                            <h2>Event: {eventId}</h2>
-                            <button className="close-btn" onClick={onClose}>×</button>
-                        </div>
-                        
-                        <div className="event-metadata">
-                            <strong>Event ID:</strong> {eventId}<br/>
-                            <strong>Timestamp:</strong> {timestamp}
-                        </div>
-                        
-                        <div className="event-content">{content}</div>
-                        
-                        {evidenceSnippets && evidenceSnippets.length > 0 && (
-                            <div className="evidence-snippets">
-                                <h3>Evidence Snippets</h3>
-                                {evidenceSnippets.map((snippet, idx) => (
-                                    <div key={idx} className="evidence-snippet">
-                                        {snippet}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-        
-        // Main Chat App
-        function ChatApp() {
-            const [messages, setMessages] = useState([]);
-            const [inputValue, setInputValue] = useState('');
-            const [loading, setLoading] = useState(false);
-            const [models, setModels] = useState([]);
-            const [selectedModel, setSelectedModel] = useState('');
-            const [patientId, setPatientId] = useState('');
-            const [patientStatus, setPatientStatus] = useState('');
-            const [selectedEvent, setSelectedEvent] = useState(null);
-            const [eventData, setEventData] = useState(null);
-            const [evidenceData, setEvidenceData] = useState({});
-            const messagesEndRef = useRef(null);
-            
-            // Auto-load patient function
-            const handleLoadPatientAuto = async (pid) => {
-                if (!pid) return;
-                
-                setLoading(true);
-                try {
-                    const res = await fetch(`${API_BASE}/api/load-patient`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ patient_id: pid.trim() })
-                    });
-                    const data = await res.json();
-                    
-                    if (data.success) {
-                        setPatientStatus(`✅ ${data.message}`);
-                    } else {
-                        setPatientStatus(`❌ ${data.message}`);
-                    }
-                } catch (err) {
-                    setPatientStatus(`❌ Error: ${err.message}`);
-                } finally {
-                    setLoading(false);
-                }
-            };
-            
-            // Load available models on mount
-            useEffect(() => {
-                fetch(`${API_BASE}/api/models`)
-                    .then(res => res.json())
-                    .then(data => {
-                        setModels(data.models || []);
-                        setSelectedModel(data.default || '');
-                    })
-                    .catch(err => console.error('Error loading models:', err));
-                
-                // Check patient status and auto-load if needed
-                fetch(`${API_BASE}/api/patient-status`)
-                    .then(res => res.json())
-                    .then(data => {
-                        console.log('Patient status response:', data);
-                        if (data.patient_id) {
-                            setPatientId(data.patient_id);
-                            setPatientStatus(`Patient ${data.patient_id} loaded`);
-                        } else if (data.auto_load_patient_id) {
-                            // Auto-load patient from command line arg
-                            console.log('Auto-loading patient:', data.auto_load_patient_id);
-                            setPatientId(data.auto_load_patient_id);
-                            // Trigger auto-load
-                            handleLoadPatientAuto(data.auto_load_patient_id);
-                        } else {
-                            console.log('No patient to auto-load');
-                        }
-                    })
-                    .catch(err => {
-                        console.error('Error checking patient status:', err);
-                    });
-            }, []);
-            
-            // Scroll to bottom when messages change
-            useEffect(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [messages]);
-            
-            // Load patient
-            const handleLoadPatient = async () => {
-                if (!patientId.trim()) return;
-                
-                setLoading(true);
-                try {
-                    const res = await fetch(`${API_BASE}/api/load-patient`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ patient_id: patientId.trim() })
-                    });
-                    const data = await res.json();
-                    
-                    if (data.success) {
-                        setPatientStatus(`✅ ${data.message}`);
-                    } else {
-                        setPatientStatus(`❌ ${data.message}`);
-                    }
-                } catch (err) {
-                    setPatientStatus(`❌ Error: ${err.message}`);
-                } finally {
-                    setLoading(false);
-                }
-            };
-            
-            // Send message
-            const handleSend = async () => {
-                if (!inputValue.trim() || loading) return;
-                
-                const userMessage = inputValue.trim();
-                setInputValue('');
-                setLoading(true);
-                
-                // Add user message to UI immediately
-                const newHistory = [...messages, { role: 'user', content: userMessage }];
-                setMessages(newHistory);
-                
-                try {
-                    const res = await fetch(`${API_BASE}/api/chat`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            message: userMessage,
-                            history: messages,
-                            model: selectedModel,
-                            timeline_mode: true,
-                            temperature: 0.1,
-                            top_p: 0.9,
-                            max_tokens: 8192,
-                            max_input_length: 8192,
-                            use_cache: false
-                        })
-                    });
-                    
-                    const data = await res.json();
-                    
-                    // Update messages with assistant response
-                    setMessages(data.history || newHistory);
-                    
-                    // Store evidence data
-                    if (data.evidence_data) {
-                        setEvidenceData(data.evidence_data);
-                    }
-                } catch (err) {
-                    setMessages([...newHistory, {
-                        role: 'assistant',
-                        content: `Error: ${err.message}`
-                    }]);
-                } finally {
-                    setLoading(false);
-                }
-            };
-            
-            // Handle citation click
-            const handleCitationClick = async (eventId) => {
-                setSelectedEvent(eventId);
-                setEventData(null);
-                
-                try {
-                    const res = await fetch(`${API_BASE}/api/event/${eventId}`);
-                    const data = await res.json();
-                    
-                    if (data.success) {
-                        setEventData(data.event);
-                    } else {
-                        setEventData({ error: data.error || 'Event not found' });
-                    }
-                } catch (err) {
-                    setEventData({ error: err.message });
-                }
-            };
-            
-            // Get evidence snippets for event
-            const getEvidenceSnippets = (eventId) => {
-                return evidenceData[eventId] || [];
-            };
-            
-            return (
-                <div className="app-container">
-                    <div className="header">
-                        <h1>MCP Chat Interface</h1>
-                        <div className="header-controls">
-                            <select
-                                className="model-selector"
-                                value={selectedModel}
-                                onChange={(e) => setSelectedModel(e.target.value)}
-                            >
-                                {models.map(model => (
-                                    <option key={model} value={model}>{model}</option>
-                                ))}
-                            </select>
-                            <div className="patient-loader">
-                                <input
-                                    type="text"
-                                    className="patient-input"
-                                    placeholder="Patient ID"
-                                    value={patientId}
-                                    onChange={(e) => setPatientId(e.target.value)}
-                                    onKeyPress={(e) => e.key === 'Enter' && handleLoadPatient()}
-                                />
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleLoadPatient}
-                                    disabled={loading}
-                                >
-                                    Load
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div className="status-bar">
-                        {patientStatus || 'No patient loaded'}
-                    </div>
-                    
-                    <div className="chat-container">
-                        <div className="messages">
-                            {messages.length === 0 && (
-                                <div style={{ textAlign: 'center', color: '#6c757d', marginTop: '2rem' }}>
-                                    Start a conversation by typing a message below.
-                                </div>
-                            )}
-                            {messages.map((msg, idx) => (
-                                <Message
-                                    key={idx}
-                                    message={msg}
-                                    evidenceData={evidenceData}
-                                    onCitationClick={handleCitationClick}
-                                />
-                            ))}
-                            {loading && (
-                                <div className="message message-assistant">
-                                    <div className="message-avatar">AI</div>
-                                    <div className="message-content">
-                                        <div className="loading"></div>
-                                    </div>
-                                </div>
-                            )}
-                            <div ref={messagesEndRef} />
-                        </div>
-                        
-                        <div className="input-area">
-                            <div className="input-container">
-                                <div className="input-wrapper">
-                                    <textarea
-                                        className="message-input"
-                                        value={inputValue}
-                                        onChange={(e) => setInputValue(e.target.value)}
-                                        onKeyPress={(e) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault();
-                                                handleSend();
-                                            }
-                                        }}
-                                        placeholder="Type your message... (Shift+Enter for new line)"
-                                        rows="1"
-                                    />
-                                </div>
-                                <button
-                                    className="send-btn"
-                                    onClick={handleSend}
-                                    disabled={loading || !inputValue.trim()}
-                                >
-                                    Send
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    {selectedEvent && (
-                        <EventModal
-                            eventId={selectedEvent}
-                            eventData={eventData}
-                            evidenceSnippets={getEvidenceSnippets(selectedEvent)}
-                            onClose={() => {
-                                setSelectedEvent(null);
-                                setEventData(null);
-                            }}
+
+                <table>
+                  <thead>
+                    <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
                         />
-                    )}
+                      </th>
+                      <th>Patient ID</th>
+                      <th>Age</th>
+                      <th>Gender</th>
+                      <th>Race</th>
+                      <th>Ethnicity</th>
+                      <th>Encounters</th>
+                      <th>Key diagnoses</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohort.map((p) => {
+                      const selected = selectedPatientIds.includes(p.patient_id);
+                      return (
+                        <tr key={p.patient_id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleSelected(p.patient_id)}
+                            />
+                          </td>
+                          <td>{p.patient_id}</td>
+                          <td>{p.age ?? ""}</td>
+                          <td>{p.gender ?? ""}</td>
+                          <td>{p.race ?? ""}</td>
+                          <td>{p.ethnicity ?? ""}</td>
+                          <td>{p.encounter_count ?? ""}</td>
+                          <td>
+                            {(p.diagnosis_codes || [])
+                              .slice(0, 3)
+                              .map((code) => (
+                                <span className="badge" key={code}>
+                                  {code}
+                                </span>
+                              ))}
+                            {(p.diagnosis_codes || []).length > 3 && (
+                              <span className="small">
+                                +
+                                {(p.diagnosis_codes || []).length - 3} more
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+
+          {/* Chat Interface */}
+          <div className="card">
+            <div className="card-header">
+              <h3>2. Chat about selected patients</h3>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className="small">
+                  Selected: {selectedPatientIds.length}{" "}
+                  {selectedPatientIds.length > 0 && "patients"}
+                </span>
+                {messages.length > 0 && (
+                  <button onClick={clearChat} style={{ fontSize: '0.8rem', padding: '4px 8px' }}>
+                    Clear chat
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <div className="small">Selected patient IDs:</div>
+              <div>
+                {selectedPatientIds.length === 0 ? (
+                  <span className="small" style={{ color: "#6b7280" }}>
+                    (None selected)
+                  </span>
+                ) : (
+                  selectedPatientIds.map((pid) => (
+                    <span className="selected-pill" key={pid}>
+                      {pid}
+                      <button onClick={() => toggleSelected(pid)}>×</button>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: "block", marginBottom: 4 }}>
+                Optional event text filter
+              </label>
+              <input
+                type="text"
+                style={{ width: "100%" }}
+                placeholder='e.g. "echocardiogram", "creatinine", "chemotherapy" (leave empty to use all events)'
+                value={eventQuery}
+                onChange={(e) => setEventQuery(e.target.value)}
+              />
+              <div className="small">
+                This restricts the set of events sent to the LLM (e.g., only events whose text/name mention "echocardiogram").
+              </div>
+            </div>
+
+            {selectedPatientIds.length > 5 && (
+              <div className="small" style={{ marginBottom: 8, padding: '8px', background: '#fef3c7', borderRadius: '4px', border: '1px solid #f59e0b' }}>
+                ⚠️ <strong>Performance Warning:</strong> You have {selectedPatientIds.length} patients selected.
+                The LLM will only process the first 5 patients to prevent timeouts.
+                Consider selecting fewer patients or using an event filter for better results.
+              </div>
+            )}
+
+            <div className="chat-container">
+              <div className="messages">
+                {messages.length === 0 && (
+                  <div style={{ textAlign: 'center', color: '#6b7280', padding: '20px' }}>
+                    Start a conversation by typing a message below.
+                    <br />
+                    <span className="small">Select patients above first.</span>
+                  </div>
+                )}
+                {messages.map((msg, idx) => (
+                  <Message
+                    key={idx}
+                    message={msg}
+                    evidenceData={evidenceData}
+                    onCitationClick={handleCitationClick}
+                  />
+                ))}
+                {chatLoading && (
+                  <div className="message message-assistant">
+                    <div className="message-avatar">AI</div>
+                    <div className="message-content">
+                      <div className="loading"></div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              <div className="input-area">
+                <div className="input-wrapper">
+                  <textarea
+                    className="message-input"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Ask a question about the selected patients... (Shift+Enter for new line)"
+                    rows="1"
+                  />
                 </div>
-            );
-        }
-        
-        // Render app
-        ReactDOM.render(<ChatApp />, document.getElementById('root'));
-    </script>
+                <button
+                  className="send-btn"
+                  onClick={handleSend}
+                  disabled={chatLoading || !inputValue.trim() || selectedPatientIds.length === 0}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+
+            {chatError && (
+              <div className="error-text" style={{ marginTop: 8 }}>
+                Error: {chatError}
+              </div>
+            )}
+
+            {debugInfo && (
+              <div className="small" style={{ marginTop: 8, padding: '8px', background: '#f9fafb', borderRadius: '4px' }}>
+                <div>Used patients: {debugInfo.used_patient_ids.join(", ")}</div>
+                <div>Events used: {debugInfo.num_events_used}</div>
+                <div>Patients with events: {debugInfo.debug_context_size}</div>
+              </div>
+            )}
+          </div>
+
+          {selectedEventKey && (
+            <EventModal
+              eventKey={selectedEventKey}
+              eventData={eventIndex[selectedEventKey]}
+              evidenceSnippets={evidenceData[selectedEventKey] || []}
+              onClose={() => setSelectedEventKey(null)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
 </body>
 </html>
-
