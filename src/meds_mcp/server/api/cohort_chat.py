@@ -1,5 +1,7 @@
 # src/meds_mcp/server/api/cohort_chat.py
 
+import sys
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 import json
 import datetime as dt
@@ -8,15 +10,27 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import logging
-from fastapi import HTTPException
 
 from meds_mcp.server.rag.simple_storage import (
     get_all_patient_events,
 )
-from examples.mcp_chat_demo.chat.llm.secure_llm_client import (
+
+# Add examples directory to path for secure_llm_client import
+# This allows the import to work when running from the server
+# From src/meds_mcp/server/api/cohort_chat.py, we need to go up 5 levels to reach project root
+_project_root = Path(__file__).parent.parent.parent.parent.parent
+_examples_path = _project_root / "examples" / "mcp_chat_demo"
+if str(_examples_path) not in sys.path:
+    sys.path.insert(0, str(_examples_path))
+
+from chat.llm.secure_llm_client import (
     get_llm_client,
     extract_response_content,
     get_default_generation_config,
+)
+from chat.llm.chat import (
+    get_calculator_tool_definition,
+    execute_tool_call,
 )
 
 def _json_default(obj):
@@ -256,12 +270,150 @@ async def cohort_chat(payload: CohortChatRequest):
         {"role": "user", "content": user_prompt},
     ]
 
+    # Define available tools
+    tools = [get_calculator_tool_definition()]
+    print(f"🔧 [Cohort Chat] Tools registered: {[t.get('function', {}).get('name') for t in tools]}")
+
     try:
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            **gen_cfg,
-        )
+        # Try to call with tools - some models/APIs might not support it
+        # Note: secure-llm's APIM provider may not handle tool calls properly
+        # If it fails, we'll fall back to regular calls
+        try:
+            print("🔧 [Cohort Chat] Sending request with tools parameter")
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                **gen_cfg,
+            )
+            print("🔧 [Cohort Chat] API call with tools succeeded")
+        except (TypeError, ValueError) as e:
+            # If tools parameter is not supported or secure-llm can't parse tool responses
+            error_msg = str(e)
+            if "Failed to parse OpenAI response" in error_msg or "NoneType" in error_msg:
+                print(f"🔧 [Cohort Chat] secure-llm cannot handle tool calls (expected): {error_msg}")
+                print("🔧 [Cohort Chat] Falling back to regular API call without tools")
+            else:
+                print(f"🔧 [Cohort Chat] Tools parameter not supported: {e}")
+                print("🔧 [Cohort Chat] Falling back to regular API call without tools")
+            # Fall back to regular call without tools
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **gen_cfg,
+            )
+        except Exception as e:
+            print(f"🔧 [Cohort Chat] Unexpected error calling API with tools: {e}")
+            # Try fallback before giving up
+            try:
+                print("🔧 [Cohort Chat] Attempting fallback to regular API call")
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    **gen_cfg,
+                )
+            except Exception as fallback_error:
+                print(f"🔧 [Cohort Chat] Fallback also failed: {fallback_error}")
+                raise
+
+        # Handle tool calls if present
+        max_tool_iterations = 5
+        iteration = 0
+        
+        while iteration < max_tool_iterations:
+            # Extract response content and tool calls
+            if isinstance(completion, dict):
+                choices = completion.get("choices", [])
+            else:
+                try:
+                    choices = completion.choices if hasattr(completion, "choices") else []
+                except AttributeError:
+                    choices = []
+            
+            if not choices:
+                break
+            
+            # Extract message from choice
+            if isinstance(choices[0], dict):
+                message = choices[0].get("message", {})
+            else:
+                message = choices[0].message if hasattr(choices[0], "message") else {}
+            
+            # Extract tool_calls
+            if isinstance(message, dict):
+                tool_calls = message.get("tool_calls")
+            else:
+                tool_calls = getattr(message, "tool_calls", None)
+            
+            # If no tool calls, break and process the response normally
+            if not tool_calls:
+                print("🔧 [Cohort Chat] No tool calls detected in response, processing normally")
+                break
+            
+            # Convert tool_calls to list if needed
+            if not isinstance(tool_calls, list):
+                tool_calls = [tool_calls] if tool_calls else []
+            
+            # Extract message content
+            if isinstance(message, dict):
+                message_content = message.get("content")
+            else:
+                message_content = getattr(message, "content", None)
+            
+            # Add assistant message with tool calls to history
+            assistant_message = {
+                "role": "assistant",
+                "content": message_content,
+                "tool_calls": tool_calls
+            }
+            messages.append(assistant_message)
+            
+            # Execute all tool calls
+            print(f"🔧 [Cohort Chat] Executing {len(tool_calls)} tool call(s)")
+            for tool_call in tool_calls:
+                # Convert tool_call to dict if it's an object
+                if not isinstance(tool_call, dict):
+                    tool_call_dict = {
+                        "id": getattr(tool_call, "id", ""),
+                        "function": {
+                            "name": getattr(tool_call.function, "name", "") if hasattr(tool_call, "function") else "",
+                            "arguments": getattr(tool_call.function, "arguments", "{}") if hasattr(tool_call, "function") else "{}"
+                        }
+                    }
+                else:
+                    tool_call_dict = tool_call
+                
+                tool_result = execute_tool_call(tool_call_dict)
+                tool_call_id = tool_call_dict.get("id", "")
+                
+                # Add tool result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": tool_result
+                })
+            
+            # Continue conversation with tool results
+            iteration += 1
+            print(f"🔄 [Cohort Chat] Tool call iteration {iteration}, continuing conversation...")
+            
+            try:
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    **gen_cfg,
+                )
+            except TypeError:
+                # Fallback if tools not supported in continuation
+                completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    **gen_cfg,
+                )
+        
         answer_text = extract_response_content(completion)
     except Exception as e:
         msg = str(e)
