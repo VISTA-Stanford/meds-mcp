@@ -29,5 +29,5 @@ meilisearch:
   host: "http://localhost:7700"
   index_name: "patients"
   auto_index: true            # index corpus automatically at server startup
-  reset_on_startup: true     # wipe and rebuild index on each server start (dev only)
+  reset_on_startup: false     # wipe and rebuild index on each server start (dev only)
   # max_patients: 10            # maximum number of patients to index (dev/testing only)
