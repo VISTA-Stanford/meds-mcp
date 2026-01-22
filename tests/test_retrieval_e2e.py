@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 
 from meds_mcp.server.tools.meilisearch_client import MCPMeiliSearch
-from meds_mcp.similarity.vignette_deterministic import DeterministicVignetteGenerator
+from meds_mcp.similarity.deterministic_linearization import (
+    DeterministicTimelineLinearizationGenerator,
+)
 from meds_mcp.similarity.candidates import MeiliCandidateRetriever
 from meds_mcp.similarity.embeddings import CachedEmbeddingStore
 from meds_mcp.similarity.retrieval import PatientSimilarityRetriever
@@ -27,7 +29,7 @@ def test_patient_similarity_retrieval_end_to_end():
     hits = meili.search("", limit=5)["hits"]
     print([h["patient_id"] for h in hits])
 
-    vignette_generator = DeterministicVignetteGenerator(
+    vignette_generator = DeterministicTimelineLinearizationGenerator(
         xml_dir="data/meds/medalign/medalign_instructions_v1_3/ehrs"
     )
 

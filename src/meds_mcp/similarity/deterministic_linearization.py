@@ -16,7 +16,9 @@ from lxml import etree
 from .vignette_base import BaseVignetteGenerator
 
 
-class DeterministicVignetteGenerator(BaseVignetteGenerator):
+class DeterministicTimelineLinearizationGenerator(BaseVignetteGenerator):
+    """Deterministic timeline linearizer that emits ordered event rows."""
+
     def __init__(self, xml_dir: str):
         self.xml_dir = Path(xml_dir)
 

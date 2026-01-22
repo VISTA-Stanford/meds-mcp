@@ -3,7 +3,9 @@
 import os
 import sys
 
-from meds_mcp.similarity.vignette_deterministic import DeterministicVignetteGenerator
+from meds_mcp.similarity.deterministic_linearization import (
+    DeterministicTimelineLinearizationGenerator,
+)
 from meds_mcp.similarity.vignette_llm import LLMVignetteGenerator
 from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
 
@@ -14,7 +16,7 @@ if not os.getenv("VAULT_SECRET_KEY"):
     sys.exit(0)
 
 
-base_vg = DeterministicVignetteGenerator(xml_dir="data/collections/dev-corpus")
+base_vg = DeterministicTimelineLinearizationGenerator(xml_dir="data/collections/dev-corpus")
 secure_llm = SecureLLMSummarizer(
     model="apim:gpt-4.1-mini",  # or any secure-llm model
     generation_overrides={"max_tokens": 512, "temperature": 0.1},

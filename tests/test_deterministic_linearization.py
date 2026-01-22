@@ -6,9 +6,11 @@ from pathlib import Path
 # Add parent directory to path if running as script
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from meds_mcp.similarity.vignette_deterministic import DeterministicVignetteGenerator
+from meds_mcp.similarity.deterministic_linearization import (
+    DeterministicTimelineLinearizationGenerator,
+)
 
-vg = DeterministicVignetteGenerator(xml_dir="data/collections/dev-corpus")
+vg = DeterministicTimelineLinearizationGenerator(xml_dir="data/collections/dev-corpus")
 
 text = vg.generate(
     "115969130",

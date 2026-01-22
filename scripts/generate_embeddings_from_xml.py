@@ -6,7 +6,9 @@ import yaml
 
 from sentence_transformers import SentenceTransformer
 
-from meds_mcp.similarity.vignette_deterministic import DeterministicVignetteGenerator
+from meds_mcp.similarity.deterministic_linearization import (
+    DeterministicTimelineLinearizationGenerator,
+)
 from meds_mcp.similarity.vignette_llm import LLMVignetteGenerator
 from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
 
@@ -56,7 +58,7 @@ EMBEDDING_DIR.mkdir(parents=True, exist_ok=True)
 # -----------------------------
 # Load vignette generator
 # -----------------------------
-base_vg = DeterministicVignetteGenerator(xml_dir=XML_DIR)
+base_vg = DeterministicTimelineLinearizationGenerator(xml_dir=XML_DIR)
 
 if USE_LLM:
     secure_llm = SecureLLMSummarizer(
