@@ -4,6 +4,8 @@ import sys
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any
+import json
 import datetime as dt
 
 from fastapi import APIRouter, HTTPException
@@ -102,115 +104,108 @@ async def cohort_chat(payload: CohortChatRequest):
     if not payload.patient_ids:
         raise HTTPException(status_code=400, detail="No patient_ids provided")
 
-    # Check if this is a simple calculation that doesn't need patient context
-    if _is_simple_calculation(payload.question):
-        logger.info(f"🔧 [Cohort Chat] Detected simple calculation, skipping patient context: {payload.question}")
-        # For simple calculations, skip patient data and just answer the question
-        # We'll still use tools, but without patient context
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a helpful assistant with access to a calculator tool. Use the calculator tool for any mathematical calculations. Answer directly and concisely."
-            },
-            {
-                "role": "user",
-                "content": payload.question
-            }
-        ]
-        
-        # Skip patient context gathering for simple calculations
-        cohort_context = []
-        total_events = 0
-        evidence_data = {}
-        event_index = {}
-    else:
-        # 1) Gather events for each patient
-        cohort_context: List[Dict[str, Any]] = []
-        total_events = 0
+    # 1) Gather events for each patient
+    cohort_context: List[Dict[str, Any]] = []
+    total_events = 0
 
-        for pid in payload.patient_ids:
-            try:
-                # ✅ get_all_patient_events is async → await it
-                events = await get_all_patient_events(pid)
-            except Exception:
-                # Skip patients that fail; log if desired
-                continue
+    for pid in payload.patient_ids:
+        try:
+            # ✅ get_all_patient_events is async → await it
+            events = await get_all_patient_events(pid)
+        except Exception:
+            # Skip patients that fail; log if desired
+            continue
 
-            events = _filter_events(events, payload.event_query)
-            if payload.max_events_per_patient:
-                events = events[: payload.max_events_per_patient]
+        events = _filter_events(events, payload.event_query)
+        if payload.max_events_per_patient:
+            events = events[: payload.max_events_per_patient]
 
-            if events:
-                total_events += len(events)
-                cohort_context.append(
-                    {
-                        "patient_id": pid,
-                        "events": events,
-                    }
-                )
-
-        if not cohort_context:
-            raise HTTPException(
-                status_code=400,
-                detail="No events found for the selected patients (after filtering)",
+        if events:
+            total_events += len(events)
+            cohort_context.append(
+                {
+                    "patient_id": pid,
+                    "events": events,
+                }
             )
 
-        # 2) Build a compact prompt for the LLM
-        import textwrap
+    if not cohort_context:
+        raise HTTPException(
+            status_code=400,
+            detail="No events found for the selected patients (after filtering)",
+        )
 
-        context_snippets = []
+    # 2) Build a compact prompt for the LLM
+    import textwrap
+    import json
 
-        # evidence + event index for frontend
-        evidence_data: Dict[str, List[str]] = {}
-        event_index: Dict[str, Dict[str, Any]] = {}
+    context_snippets = []
 
-        for entry in cohort_context:
-            pid = entry["patient_id"]
-            events = entry["events"]
+    # evidence + event index for frontend
+    evidence_data: Dict[str, List[str]] = {}
+    event_index: Dict[str, Dict[str, Any]] = {}
 
-            simplified_events = []
-            for idx, ev in enumerate(events):
-                # Try to get a stable event id if available
-                raw_eid = (
-                    ev.get("event_id")
-                    or ev.get("id")
-                    or ev.get("_id")
-                    or ev.get("event_uid")
-                )
+    for entry in cohort_context:
+        pid = entry["patient_id"]
+        events = entry["events"]
 
-                # Fallback: synthesize one if missing
-                if raw_eid is None:
-                    raw_eid = f"ev{idx}"
+        simplified_events = []
+        for idx, ev in enumerate(events):
+            # Try to get a stable event id if available
+            raw_eid = (
+                ev.get("event_id")
+                or ev.get("id")
+                or ev.get("_id")
+                or ev.get("event_uid")
+            )
 
-                # 🔑 event_key is what the LLM will cite and what the UI will look up
-                event_key = f"{pid}:{raw_eid}"
+            # Fallback: synthesize one if missing
+            if raw_eid is None:
+                raw_eid = f"ev{idx}"
 
-                ts = ev.get("timestamp") or ev.get("event_time")
-                ev_type = ev.get("event_type") or ev.get("type")
-                text = ev.get("text") or ev.get("content") or ""
-                name = ev.get("name")
+            # 🔑 event_key is what the LLM will cite and what the UI will look up
+            event_key = f"{pid}:{raw_eid}"
 
-                # Compact snippet for evidence pane
-                snippet_bits = []
-                if ts:
-                    snippet_bits.append(str(ts))
-                if ev_type:
-                    snippet_bits.append(str(ev_type))
-                if name:
-                    snippet_bits.append(str(name))
-                if text:
-                    snippet_bits.append(text[:200])
+            ts = ev.get("timestamp") or ev.get("event_time")
+            ev_type = ev.get("event_type") or ev.get("type")
+            text = ev.get("text") or ev.get("content") or ""
+            name = ev.get("name")
 
-                snippet = " | ".join(snippet_bits) or "(no details)"
+            # Compact snippet for evidence pane
+            snippet_bits = []
+            if ts:
+                snippet_bits.append(str(ts))
+            if ev_type:
+                snippet_bits.append(str(ev_type))
+            if name:
+                snippet_bits.append(str(name))
+            if text:
+                snippet_bits.append(text[:200])
 
-                # Store in evidence_data
-                evidence_data.setdefault(event_key, []).append(snippet)
+            snippet = " | ".join(snippet_bits) or "(no details)"
 
-                # Store raw-ish event for modal
-                event_index[event_key] = {
-                    "patient_id": pid,
+            # Store in evidence_data
+            evidence_data.setdefault(event_key, []).append(snippet)
+
+            # Store raw-ish event for modal
+            event_index[event_key] = {
+                "patient_id": pid,
+                "event_key": event_key,
+                "raw_event_id": raw_eid,
+                "timestamp": ts,
+                "type": ev_type,
+                "code": ev.get("code"),
+                "name": name,
+                "value": ev.get("value"),
+                "unit": ev.get("unit"),
+                "text": text,
+                # keep full original too if you want
+                "raw": ev,
+            }
+
+            simplified_events.append(
+                {
                     "event_key": event_key,
-                    "raw_event_id": raw_eid,
                     "timestamp": ts,
                     "type": ev_type,
                     "code": ev.get("code"),
@@ -218,22 +213,8 @@ async def cohort_chat(payload: CohortChatRequest):
                     "value": ev.get("value"),
                     "unit": ev.get("unit"),
                     "text": text,
-                    # keep full original too if you want
-                    "raw": ev,
                 }
-
-                simplified_events.append(
-                    {
-                        "event_key": event_key,
-                        "timestamp": ts,
-                        "type": ev_type,
-                        "code": ev.get("code"),
-                        "name": name,
-                        "value": ev.get("value"),
-                        "unit": ev.get("unit"),
-                        "text": text,
-                    }
-                )
+            )
 
         context_snippets.append(
             {
@@ -242,49 +223,43 @@ async def cohort_chat(payload: CohortChatRequest):
             }
         )
 
-        cohort_json = json.dumps(
-            context_snippets,
-            ensure_ascii=False,
-            indent=2,
-            default=_json_default,
-        )
 
-        system_prompt = (
-            "You are a clinical data analyst reviewing a cohort of patients. "
-            "You will be given a list of patients with selected events from their timelines, "
-            "and a question about this pool. Answer using trends, similarities, and differences "
-            "across patients. Do not hallucinate diagnoses or outcomes not supported by the data.\n\n"
-            "Each event in the JSON includes an 'event_key' field like '123456:ev42'. "
-            "Whenever you make a statement that is directly supported by a specific event, "
-            "append a citation in the form [[event_key]]. For example: "
-            "\"Patient 123456 had a high creatinine [[123456:ev42]]\".\n"
-            "Use citations when possible, but you may omit them for very high-level summaries.\n\n"
-            "IMPORTANT: You have access to a calculator tool. If the question involves any mathematical calculations, "
-            "arithmetic operations, or numerical computations, you MUST use the calculator tool to perform the calculation. "
-            "Do not attempt to calculate in your head - always use the calculator tool for any math."
-        )
+    cohort_json = json.dumps(
+        context_snippets,
+        ensure_ascii=False,
+        indent=2,
+        default=_json_default,
+    )
 
-        user_prompt = textwrap.dedent(
-            f"""
-            Here is a cohort of patients with selected events:
+    system_prompt = (
+        "You are a clinical data analyst reviewing a cohort of patients. "
+        "You will be given a list of patients with selected events from their timelines, "
+        "and a question about this pool. Answer using trends, similarities, and differences "
+        "across patients. Do not hallucinate diagnoses or outcomes not supported by the data.\n\n"
+        "Each event in the JSON includes an 'event_key' field like '123456:ev42'. "
+        "Whenever you make a statement that is directly supported by a specific event, "
+        "append a citation in the form [[event_key]]. For example: "
+        "\"Patient 123456 had a high creatinine [[123456:ev42]]\".\n"
+        "Use citations when possible, but you may omit them for very high-level summaries."
+    )
 
-            COHORT DATA (JSON):
-            {cohort_json}
 
-            QUESTION ABOUT THIS COHORT:
-            {payload.question}
+    user_prompt = textwrap.dedent(
+        f"""
+        Here is a cohort of patients with selected events:
 
-            Please provide:
-            - A concise summary of key patterns across these patients.
-            - Any notable differences between them (if visible).
-            - Brief mention of limitations (e.g., missing labs, limited time span) if relevant.
-            """
-        )
+        COHORT DATA (JSON):
+        {cohort_json}
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        QUESTION ABOUT THIS COHORT:
+        {payload.question}
+
+        Please provide:
+        - A concise summary of key patterns across these patients.
+        - Any notable differences between them (if visible).
+        - Brief mention of limitations (e.g., missing labs, limited time span) if relevant.
+        """
+    )
 
     # 3) Call secure LLM (via secure-llm client)
     client = get_llm_client(payload.model)
@@ -293,172 +268,17 @@ async def cohort_chat(payload: CohortChatRequest):
     # Merge default generation config with user overrides
     gen_cfg = get_default_generation_config(payload.generation_config)
 
-    # messages already set above if simple calculation, otherwise build them here
-    if not _is_simple_calculation(payload.question):
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-    # else: messages already set in the simple calculation branch above
-
-    # Define available tools
-    tools = [get_calculator_tool_definition()]
-    print(f"🔧 [Cohort Chat] Tools registered: {[t.get('function', {}).get('name') for t in tools]}")
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
 
     try:
-        # Try to call with tools - some models/APIs might not support it
-        # Note: secure-llm's APIM provider may not handle tool calls properly
-        # If it fails, we'll fall back to regular calls
-        try:
-            print("🔧 [Cohort Chat] Sending request with tools parameter")
-            # Try with tool_choice="auto" first
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                **gen_cfg,
-            )
-            print("🔧 [Cohort Chat] API call with tools succeeded")
-        except (TypeError, ValueError) as e:
-            # If tools parameter is not supported or secure-llm can't parse tool responses
-            error_msg = str(e)
-            if "Failed to parse OpenAI response" in error_msg or "NoneType" in error_msg:
-                print(f"🔧 [Cohort Chat] secure-llm parser failed (likely tool call response): {error_msg}")
-                print("🔧 [Cohort Chat] This indicates the LLM tried to use a tool, but secure-llm can't parse it")
-                print("🔧 [Cohort Chat] This is a known limitation of secure-llm's APIM provider")
-                print("🔧 [Cohort Chat] Please report this issue to secure-llm maintainers")
-                print("🔧 [Cohort Chat] Falling back to regular API call without tools")
-            else:
-                print(f"🔧 [Cohort Chat] Tools parameter not supported: {e}")
-                print("🔧 [Cohort Chat] Falling back to regular API call without tools")
-            # Fall back to regular call without tools
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                **gen_cfg,
-            )
-        except Exception as e:
-            print(f"🔧 [Cohort Chat] Unexpected error calling API with tools: {e}")
-            # Try fallback before giving up
-            try:
-                print("🔧 [Cohort Chat] Attempting fallback to regular API call")
-                completion = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    **gen_cfg,
-                )
-            except Exception as fallback_error:
-                print(f"🔧 [Cohort Chat] Fallback also failed: {fallback_error}")
-                raise
-
-        # Handle tool calls if present
-        max_tool_iterations = 5
-        iteration = 0
-        
-        while iteration < max_tool_iterations:
-            # Extract response content and tool calls
-            if isinstance(completion, dict):
-                choices = completion.get("choices", [])
-            else:
-                try:
-                    choices = completion.choices if hasattr(completion, "choices") else []
-                except AttributeError:
-                    choices = []
-            
-            if not choices:
-                break
-            
-            # Extract message from choice
-            if isinstance(choices[0], dict):
-                message = choices[0].get("message", {})
-            else:
-                message = choices[0].message if hasattr(choices[0], "message") else {}
-            
-            # Extract tool_calls
-            if isinstance(message, dict):
-                tool_calls = message.get("tool_calls")
-                print(f"🔧 [Cohort Chat] Message keys: {list(message.keys())}")
-                print(f"🔧 [Cohort Chat] Message content: {message.get('content', 'None')}")
-                print(f"🔧 [Cohort Chat] Tool calls from dict: {tool_calls}")
-            else:
-                tool_calls = getattr(message, "tool_calls", None)
-                print(f"🔧 [Cohort Chat] Tool calls from object: {tool_calls}")
-                # Try to access as attribute
-                if tool_calls is None and hasattr(message, "__dict__"):
-                    print(f"🔧 [Cohort Chat] Message __dict__: {message.__dict__}")
-            
-            # If no tool calls, break and process the response normally
-            if not tool_calls:
-                print("🔧 [Cohort Chat] No tool calls detected in response, processing normally")
-                # Debug: print the full message structure to see what we got
-                if isinstance(message, dict):
-                    print(f"🔧 [Cohort Chat] Full message structure: {json.dumps(message, indent=2, default=str)}")
-                break
-            
-            # Convert tool_calls to list if needed
-            if not isinstance(tool_calls, list):
-                tool_calls = [tool_calls] if tool_calls else []
-            
-            # Extract message content
-            if isinstance(message, dict):
-                message_content = message.get("content")
-            else:
-                message_content = getattr(message, "content", None)
-            
-            # Add assistant message with tool calls to history
-            assistant_message = {
-                "role": "assistant",
-                "content": message_content,
-                "tool_calls": tool_calls
-            }
-            messages.append(assistant_message)
-            
-            # Execute all tool calls
-            print(f"🔧 [Cohort Chat] Executing {len(tool_calls)} tool call(s)")
-            for tool_call in tool_calls:
-                # Convert tool_call to dict if it's an object
-                if not isinstance(tool_call, dict):
-                    tool_call_dict = {
-                        "id": getattr(tool_call, "id", ""),
-                        "function": {
-                            "name": getattr(tool_call.function, "name", "") if hasattr(tool_call, "function") else "",
-                            "arguments": getattr(tool_call.function, "arguments", "{}") if hasattr(tool_call, "function") else "{}"
-                        }
-                    }
-                else:
-                    tool_call_dict = tool_call
-                
-                tool_result = execute_tool_call(tool_call_dict)
-                tool_call_id = tool_call_dict.get("id", "")
-                
-                # Add tool result to messages
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_result
-                })
-            
-            # Continue conversation with tool results
-            iteration += 1
-            print(f"🔄 [Cohort Chat] Tool call iteration {iteration}, continuing conversation...")
-            
-            try:
-                completion = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    **gen_cfg,
-                )
-            except TypeError:
-                # Fallback if tools not supported in continuation
-                completion = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    **gen_cfg,
-                )
-        
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            **gen_cfg,
+        )
         answer_text = extract_response_content(completion)
     except Exception as e:
         msg = str(e)
