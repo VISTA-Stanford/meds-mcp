@@ -15,6 +15,7 @@ import os
 os.environ["JAX_PLATFORMS"] = "cpu"  # Suppress TPU warnings
 
 import asyncio
+import sys
 import uvicorn
 import yaml
 import logging
@@ -331,6 +332,33 @@ def main():
         tags=["search"],
     )
 
+    # Add /api/models endpoint for React frontend compatibility
+    @search_api.get("/models")
+    async def get_models():
+        """Get list of available models from secure-llm."""
+        try:
+            # Import here to avoid circular dependencies
+            _project_root = Path(__file__).parent.parent.parent.parent.parent
+            _examples_path = _project_root / "examples" / "mcp_chat_demo"
+            if str(_examples_path) not in sys.path:
+                sys.path.insert(0, str(_examples_path))
+            from chat.llm.secure_llm_client import get_available_models
+            models = get_available_models()
+            return {"models": models, "default": "apim:gpt-4.1-mini"}
+        except Exception as e:
+            logging.warning(f"Error getting models: {e}")
+            # Return fallback models
+            return {
+                "models": [
+                    "apim:gpt-4.1-mini",
+                    "apim:gpt-4.1",
+                    "apim:o3-mini",
+                    "apim:claude-3.5",
+                    "apim:gemini-2.0-flash",
+                ],
+                "default": "apim:gpt-4.1-mini"
+            }
+
     # Cohort chat – optional, don't break faceted search if this import fails
     try:
         from meds_mcp.server.api import cohort_chat
@@ -340,9 +368,12 @@ def main():
             prefix="/cohort",
             tags=["cohort"],
         )
-        print("📊 Faceted search & cohort API enabled (requires Meilisearch)", flush=True)
+        print("📊 Faceted search & cohort API enabled", flush=True)
+        print(f"   Cohort chat endpoint: /api/cohort/cohort-chat", flush=True)
     except Exception as e:
         print(f"⚠️ Cohort API disabled: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         print("   Faceted search API still enabled", flush=True)
 
     # Mount all HTTP APIs under /api

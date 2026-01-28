@@ -61,13 +61,13 @@ def get_calculator_tool_definition() -> Dict[str, Any]:
         "type": "function",
         "function": {
             "name": "calculator",
-            "description": "A simple calculator that can evaluate mathematical expressions. Use this tool when you need to perform calculations or arithmetic operations.",
+            "description": "A calculator tool that evaluates mathematical expressions. ALWAYS use this tool for ANY mathematical calculation, arithmetic operation, or numerical computation. Examples: addition (2+2), subtraction (10-5), multiplication (5*3), division (100/4), or complex expressions ((5+3)*2).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "The mathematical expression to evaluate (e.g., '2 + 2', '10 * 5', '100 / 4', '(5 + 3) * 2')"
+                        "description": "The mathematical expression to evaluate. Can include numbers, operators (+, -, *, /), and parentheses. Examples: '2 + 2', '10 * 5', '100 / 4', '(5 + 3) * 2', '10+10'"
                     }
                 },
                 "required": ["expression"]
@@ -373,7 +373,11 @@ def stream_chat_response(
         logger.info(f"🔧 Sending request with tools: {json.dumps(tools, indent=2)}")
         
         # Try to call with tools - some models/APIs might not support it
+        # According to Azure OpenAI docs, function calling should be supported
         try:
+            # Try to make the call - secure-llm should support tools parameter
+            # If the model returns a tool call, secure-llm's parser might fail
+            # but we'll catch that and handle it
             response = llm_client.chat.completions.create(
                 model=model_name,
                 messages=messages,
@@ -385,6 +389,21 @@ def stream_chat_response(
             )
             print("🔧 API call with tools succeeded")
             logger.info("🔧 API call with tools succeeded")
+            
+            # Check if response has tool_calls - this means the LLM wants to use a tool
+            # Note: According to Azure OpenAI docs, function calling should be supported
+            # but secure-llm's APIM provider may have issues parsing tool call responses
+            if isinstance(response, dict):
+                choices = response.get("choices", [])
+                if choices:
+                    message = choices[0].get("message", {})
+                    tool_calls = message.get("tool_calls")
+                    if tool_calls:
+                        print(f"🔧 Tool calls detected in response! Count: {len(tool_calls) if isinstance(tool_calls, list) else 1}")
+                        logger.info(f"🔧 Tool calls detected in response: {tool_calls}")
+                    else:
+                        print("🔧 No tool calls in response (LLM chose not to use tools)")
+                        logger.debug("🔧 No tool calls in response")
         except (TypeError, ValueError) as e:
             # If tools parameter is not supported or secure-llm can't parse tool responses
             error_msg = str(e)
