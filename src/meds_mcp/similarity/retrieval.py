@@ -1,25 +1,3 @@
-"""
-(XML timeline)
-      │
-      │  structured filters (Meilisearch)
-      ▼
-Candidate patients
-      │
-      │  temporal filtering (date window)
-      ▼
-Selected events
-      │
-      │  vignette generation
-      │    ├─ deterministic
-      │    └─ LLM-based
-      ▼
-Vignette text
-      │
-      │  temporal weighting
-      ▼
-Embeddings → similarity → top-k
-"""
-
 import os
 import numpy as np
 from numpy.linalg import norm
