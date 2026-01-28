@@ -29,18 +29,13 @@ class SecureLLMSummarizer:
         self.client = get_llm_client(model_name=model)
         self.model = model
         self.system_prompt = system_prompt or (
-            "You are generating a clinical vignette for patient similarity retrieval.\n\n"
-            "Rewrite the following patient timeline into a concise clinical vignette.\n\n"
-            "Rules:\n"
-            "- Preserve clinical content (conditions, procedures, medications, findings).\n"
-            "- Do NOT describe the timeline itself.\n"
-            "- Do NOT add new information or interpretations.\n"
-            "- Do NOT speculate or diagnose.\n"
-            "- Prefer concrete events over commentary.\n"
-            "- Keep temporal ordering when possible.\n\n"
-            "Output:\n"
-            "- 3–5 short sentences or bullet points.\n"
-            "- Plain clinical language."
+            "You are generating a clinical vignette for patient similarity retrieval. "
+            "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language. "
+            "Preserve all explicitly stated clinical information, including conditions, symptoms, procedures, medications, and key findings. "
+            "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
+            "Avoid speculation, causal claims, or diagnostic reasoning beyond what is stated. "
+            "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
+            "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
         )
         self.gen_config = get_default_generation_config(generation_overrides)
 

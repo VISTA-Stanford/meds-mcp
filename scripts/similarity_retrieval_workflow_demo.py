@@ -13,12 +13,12 @@ Note: Requires VAULT_SECRET_KEY environment variable for LLM access
       Generates indices online, ensuring consistency with n_encounters parameter
 
 Usage:
-    python scripts/simplified_workflow_demo.py \
+    python scripts/similarity_retrieval_workflow_demo.py \
         --patient-id 115969130 \
         --corpus-dir data/collections/dev-corpus \
         --n-encounters 2 \
-        --top-k 5 \
-        --llm-model `apim:gpt-4.1-mini`
+        --top-k 2 \
+        --llm-model apim:gpt-4.1-mini
 """
 
 import os
