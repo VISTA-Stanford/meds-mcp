@@ -204,18 +204,39 @@ class AthenaOntology:
 
     @classmethod
     def load_from_parquet(cls, file_path: str):
-        """Load the ontology from Parquet files in the specified directory."""
+        """Load the ontology from Parquet files in the specified directory.
+        
+        Optimized for large datasets (millions of rows). Uses pandas for efficient
+        column access, which is faster than converting entire Arrow tables to Python lists.
+        """
+        import pandas as pd
+        import numpy as np
+        
         description_table = pq.read_table(
             os.path.join(file_path, "descriptions.parquet")
         )
         parents_table = pq.read_table(os.path.join(file_path, "parents.parquet"))
 
-        description_map = {
-            row["code"]: row["description"] for row in description_table.to_pylist()
-        }
-        parent_map = collections.defaultdict(
-            set, {row["code"]: set(row["parents"]) for row in parents_table.to_pylist()}
-        )
+        # Convert to pandas - Arrow->Pandas conversion is optimized
+        # Then extract as numpy arrays for fast dict creation
+        desc_df = description_table.to_pandas()
+        description_map = dict(zip(desc_df["code"], desc_df["description"]))
+        
+        # For parents, convert to pandas and build dict efficiently
+        par_df = parents_table.to_pandas()
+        parent_map = collections.defaultdict(set)
+        # Use iterrows is slow, but we need to convert lists to sets
+        # Optimize by using vectorized operations where possible
+        for code, parents in zip(par_df["code"], par_df["parents"]):
+            # Handle None/NaN and empty lists properly
+            if parents is None or (isinstance(parents, (list, np.ndarray)) and len(parents) == 0):
+                parent_map[code] = set()
+            else:
+                # Convert to list first if it's a numpy array or pandas Series
+                if isinstance(parents, (np.ndarray, pd.Series)):
+                    parents = parents.tolist() if hasattr(parents, 'tolist') else list(parents)
+                parent_map[code] = set(parents)
+        
         # faster to rebuilt children_map from parent_map
         return cls(description_map, parent_map, children_map=None)
 
@@ -294,19 +315,47 @@ class AthenaOntology:
 
                 # Process CONCEPT_RELATIONSHIP.csv
                 relationship_file = reader.read_csv("CONCEPT_RELATIONSHIP.csv")
-                relationship_file = relationship_file.filter(
-                    (pl.col("relationship_id") == "Maps to")
+                
+                # Filter for "Is a" relationships (hierarchical parent-child)
+                is_a_relationships = relationship_file.filter(
+                    (pl.col("relationship_id") == "Is a")
                     & (pl.col("concept_id_1") != pl.col("concept_id_2"))
+                    & (pl.col("invalid_reason").is_null() | (pl.col("invalid_reason") == ""))
                 )
 
                 for concept_id_1, concept_id_2 in (
-                    relationship_file.select(
+                    is_a_relationships.select(
                         pl.col("concept_id_1").cast(pl.Int64),
                         pl.col("concept_id_2").cast(pl.Int64),
                     )
                     .collect()
                     .rows()
                 ):
+                    # Add "Is a" relationships: concept_id_1 is a child of concept_id_2
+                    if (
+                        concept_id_1 in concept_id_to_code_map
+                        and concept_id_2 in concept_id_to_code_map
+                    ):
+                        parents_map[concept_id_to_code_map[concept_id_1]].add(
+                            concept_id_to_code_map[concept_id_2]
+                        )
+                
+                # Also process "Maps to" relationships for non-standard concepts
+                maps_to_relationships = relationship_file.filter(
+                    (pl.col("relationship_id") == "Maps to")
+                    & (pl.col("concept_id_1") != pl.col("concept_id_2"))
+                    & (pl.col("invalid_reason").is_null() | (pl.col("invalid_reason") == ""))
+                )
+
+                for concept_id_1, concept_id_2 in (
+                    maps_to_relationships.select(
+                        pl.col("concept_id_1").cast(pl.Int64),
+                        pl.col("concept_id_2").cast(pl.Int64),
+                    )
+                    .collect()
+                    .rows()
+                ):
+                    # Only add "Maps to" for non-standard concepts
                     if concept_id_1 in non_standard_concepts:
                         if (
                             concept_id_1 in concept_id_to_code_map
@@ -389,9 +438,11 @@ class AthenaOntology:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
             return code.split("/")[0] if "/" in code else code
 
-        def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
+        def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph, depth: int = 0):
             """Recursively build filtered subgraph."""
             if current_code in visited:
+                return
+            if max_depth is not None and depth > max_depth:
                 return
 
             visited.add(current_code)
@@ -409,16 +460,18 @@ class AthenaOntology:
                 is_starting_node=(current_code == code),
             )
 
+            # Get parents with filters applied
+            parents = self.get_parents(
+                current_code,
+                relationship_types=relationship_types,
+                vocabularies=vocabularies,
+            )
+            
             # Add parents
-            for parent in self.get_parents(current_code):
+            for parent in parents:
                 if parent in self.description_map:  # Ensure parent exists
-                    # Check if parent should be included based on vocabulary filtering
-                    if (
-                        allowed_vocabularies is None
-                        or _get_vocabulary(parent) in allowed_vocabularies
-                    ):
-                        G.add_edge(current_code, parent)
-                        _get_filtered_subgraph(parent, visited, G)
+                    G.add_edge(current_code, parent)
+                    _get_filtered_subgraph(parent, visited, G, depth + 1)
 
         G = nx.DiGraph()
         visited = set()
@@ -627,10 +680,16 @@ class LazyAthenaOntology:
                 relationships_df = reader.read_csv("CONCEPT_RELATIONSHIP.csv")
                 ancestors_df = reader.read_csv("CONCEPT_ANCESTOR.csv")
 
-                # Pre-filter relationships for "Maps to" only
+                # Pre-filter relationships for both "Is a" and "Maps to"
+                # "Is a" is the primary hierarchical relationship
+                # "Maps to" is for non-standard concept mappings
                 relationships_df = relationships_df.filter(
-                    (pl.col("relationship_id") == "Maps to")
+                    (
+                        (pl.col("relationship_id") == "Is a")
+                        | (pl.col("relationship_id") == "Maps to")
+                    )
                     & (pl.col("concept_id_1") != pl.col("concept_id_2"))
+                    & (pl.col("invalid_reason").is_null() | (pl.col("invalid_reason") == ""))
                 )
 
                 # Pre-filter ancestors for direct parent-child relationships only
@@ -695,8 +754,25 @@ class LazyAthenaOntology:
 
         return children
 
-    def get_parents(self, code: str) -> Set[str]:
-        """Get immediate parents of a code by querying dataframes."""
+    def get_parents(
+        self,
+        code: str,
+        relationship_types: Optional[List[str]] = None,
+        vocabularies: Optional[List[str]] = None,
+    ) -> Set[str]:
+        """
+        Get immediate parents of a code by querying dataframes with optional filtering.
+        
+        Args:
+            code: Code to get parents for
+            relationship_types: Optional list of relationship types to include
+                              (e.g., ["Is a", "Maps to"]). If None, includes all.
+            vocabularies: Optional list of vocabulary prefixes to filter by
+                         (e.g., ["ICD10CM", "SNOMED"]). If None, includes all.
+        
+        Returns:
+            Set of parent codes matching the filters
+        """
         parents = set()
 
         # Check code metadata first for custom codes
@@ -708,33 +784,50 @@ class LazyAthenaOntology:
             # If not in mapping but has custom metadata, return that
             return parents
 
-        # Query ancestor relationships
-        ancestors_result = (
-            self.ancestors_df.filter(
-                pl.col("descendant_concept_id").cast(pl.Int64) == concept_id
+        # Determine which relationship types to query
+        if relationship_types is None:
+            relationship_types = ["Is a", "Maps to"]  # Default: include both
+        
+        relationship_types_set = set(relationship_types)
+
+        # Query "Is a" relationships if requested
+        if "Is a" in relationship_types_set:
+            is_a_result = (
+                self.relationships_df.filter(
+                    (pl.col("concept_id_1").cast(pl.Int64) == concept_id)
+                    & (pl.col("relationship_id") == "Is a")
+                )
+                .select(pl.col("concept_id_2").cast(pl.Int64))
+                .collect()
             )
-            .select(pl.col("ancestor_concept_id").cast(pl.Int64))
-            .collect()
-        )
 
-        for (parent_concept_id,) in ancestors_result.rows():
-            parent_code = self.concept_id_to_code_map.get(parent_concept_id)
-            if parent_code:
-                parents.add(parent_code)
+            for (parent_concept_id,) in is_a_result.rows():
+                parent_code = self.concept_id_to_code_map.get(parent_concept_id)
+                if parent_code:
+                    parents.add(parent_code)
 
-        # Query "Maps to" relationships for non-standard concepts
-        # Check if this concept is non-standard
-        concept_check = (
-            self.concepts_df.filter(pl.col("concept_id").cast(pl.Int64) == concept_id)
-            .select(pl.col("standard_concept"))
-            .collect()
-        )
+        # Query ancestor relationships if "Is a" is included (backup)
+        if "Is a" in relationship_types_set or relationship_types is None:
+            ancestors_result = (
+                self.ancestors_df.filter(
+                    (pl.col("descendant_concept_id").cast(pl.Int64) == concept_id)
+                    & (pl.col("min_levels_of_separation") == "1")
+                )
+                .select(pl.col("ancestor_concept_id").cast(pl.Int64))
+                .collect()
+            )
 
-        if concept_check.height > 0 and concept_check.row(0)[0] is None:
-            # This is a non-standard concept, look for "Maps to" relationships
+            for (parent_concept_id,) in ancestors_result.rows():
+                parent_code = self.concept_id_to_code_map.get(parent_concept_id)
+                if parent_code:
+                    parents.add(parent_code)
+
+        # Query "Maps to" relationships if requested
+        if "Maps to" in relationship_types_set:
             maps_to_result = (
                 self.relationships_df.filter(
-                    pl.col("concept_id_1").cast(pl.Int64) == concept_id
+                    (pl.col("concept_id_1").cast(pl.Int64) == concept_id)
+                    & (pl.col("relationship_id") == "Maps to")
                 )
                 .select(pl.col("concept_id_2").cast(pl.Int64))
                 .collect()
@@ -745,10 +838,20 @@ class LazyAthenaOntology:
                 if target_code:
                     parents.add(target_code)
 
+        # Apply vocabulary filter if specified
+        if vocabularies:
+            def _get_vocab(c: str) -> str:
+                return c.split("/")[0] if "/" in c else c
+            parents = {p for p in parents if _get_vocab(p) in vocabularies}
+
         return parents
 
     def get_ancestor_subgraph(
-        self, code: str, vocabularies: Optional[list[str]] = None
+        self,
+        code: str,
+        vocabularies: Optional[list[str]] = None,
+        relationship_types: Optional[List[str]] = None,
+        max_depth: Optional[int] = None,
     ) -> nx.DiGraph:
         """
         Get ancestor subgraph (parents and their parents) for a given code.
@@ -757,6 +860,9 @@ class LazyAthenaOntology:
             code: The starting code
             vocabularies: Optional list of vocabulary prefixes to include (e.g., ["RxNorm", "ATC"]).
                         Use ["*"] to include all vocabularies (default behavior).
+            relationship_types: Optional list of relationship types to include
+                              (e.g., ["Is a", "Maps to"]). If None, includes all.
+            max_depth: Optional maximum depth to traverse
 
         Returns:
             NetworkX DiGraph containing the ancestor subgraph
@@ -774,9 +880,11 @@ class LazyAthenaOntology:
             """Extract vocabulary from code (e.g., 'RxNorm/123' -> 'RxNorm')."""
             return code.split("/")[0] if "/" in code else code
 
-        def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph):
+        def _get_filtered_subgraph(current_code: str, visited: set, G: nx.DiGraph, depth: int = 0):
             """Recursively build filtered subgraph."""
             if current_code in visited:
+                return
+            if max_depth is not None and depth > max_depth:
                 return
 
             visited.add(current_code)
@@ -795,21 +903,23 @@ class LazyAthenaOntology:
                 is_starting_node=(current_code == code),
             )
 
+            # Get parents with filters applied
+            parents = self.get_parents(
+                current_code,
+                relationship_types=relationship_types,
+                vocabularies=vocabularies,
+            )
+            
             # Add parents
-            for parent in self.get_parents(current_code):
+            for parent in parents:
                 if parent in self.code_to_concept_id_map:  # Ensure parent exists
-                    # Check if parent should be included based on vocabulary filtering
-                    if (
-                        allowed_vocabularies is None
-                        or _get_vocabulary(parent) in allowed_vocabularies
-                    ):
-                        G.add_edge(current_code, parent)
-                        _get_filtered_subgraph(parent, visited, G)
+                    G.add_edge(current_code, parent)
+                    _get_filtered_subgraph(parent, visited, G, depth + 1)
 
         G = nx.DiGraph()
         visited = set()
 
-        _get_filtered_subgraph(code, visited, G)
+        _get_filtered_subgraph(code, visited, G, depth=0)
 
         return G
 

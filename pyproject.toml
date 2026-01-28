@@ -149,6 +149,7 @@ minversion = "7.0"
 python_classes = ["Test*"]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
+pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.coverage.run]
