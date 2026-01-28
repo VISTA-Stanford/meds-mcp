@@ -1,5 +1,9 @@
 # src/meds_mcp/server/api/cohort_chat.py
 
+import sys
+import json
+from pathlib import Path
+from typing import List, Optional, Dict, Any
 from typing import List, Optional, Dict, Any
 import json
 import datetime as dt
@@ -8,15 +12,28 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import logging
-from fastapi import HTTPException
 
 from meds_mcp.server.rag.simple_storage import (
     get_all_patient_events,
 )
-from examples.mcp_chat_demo.chat.llm.secure_llm_client import (
+
+# Add examples directory to path for secure_llm_client import
+# This allows the import to work when running from the server
+# From src/meds_mcp/server/api/cohort_chat.py, we need to go up 5 levels to reach project root
+_project_root = Path(__file__).parent.parent.parent.parent.parent
+_examples_path = _project_root / "examples" / "mcp_chat_demo"
+if str(_examples_path) not in sys.path:
+    sys.path.insert(0, str(_examples_path))
+
+from chat.llm.secure_llm_client import (
     get_llm_client,
     extract_response_content,
     get_default_generation_config,
+)
+from chat.llm.chat import (
+    get_calculator_tool_definition,
+    execute_tool_call,
+    _is_simple_calculation,
 )
 
 def _json_default(obj):

@@ -15,6 +15,7 @@ import os
 os.environ["JAX_PLATFORMS"] = "cpu"  # Suppress TPU warnings
 
 import asyncio
+import sys
 import uvicorn
 import yaml
 import logging
