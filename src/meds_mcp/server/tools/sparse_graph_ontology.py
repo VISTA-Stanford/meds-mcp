@@ -408,12 +408,11 @@ class SparseGraphOntology:
         print(f"Saving sparse matrix to {matrix_path}...")
         sp.save_npz(matrix_path, matrix, compressed=True)
         
-        # Save code_to_idx as simple JSON (Python dicts are already fast)
-        idx_path = path.replace(".pkl.gz", "_index.json")
-        import json
+        # Save code_to_idx as binary pickle (much faster than JSON for large dicts)
+        idx_path = path.replace(".pkl.gz", "_index.pkl")
         print(f"Saving code index to {idx_path}...")
-        with open(idx_path, "w") as f:
-            json.dump(code_to_idx, f)
+        with open(idx_path, "wb") as f:
+            pickle.dump(code_to_idx, f, protocol=pickle.HIGHEST_PROTOCOL)
         
         # Build codes array for idx->code - use compressed format
         # Store as newline-separated text file (much smaller than numpy object array)
@@ -455,24 +454,34 @@ class SparseGraphOntology:
                 )
             raise FileNotFoundError(f"Sparse matrix file not found: {matrix_path}")
         
+        matrix_start = time.time()
         matrix = sp.load_npz(matrix_path)
+        matrix_time = time.time() - matrix_start
         
-        # Load code_to_idx from JSON (simple and fast)
-        idx_path = path.replace(".pkl.gz", "_index.json")
+        # Load code_to_idx from pickle (much faster than JSON)
+        idx_start = time.time()
+        idx_path_pkl = path.replace(".pkl.gz", "_index.pkl")
+        idx_path_json = path.replace(".pkl.gz", "_index.json")  # Old format fallback
         code_to_idx = {}
-        if os.path.exists(idx_path):
+        if os.path.exists(idx_path_pkl):
+            with open(idx_path_pkl, "rb") as f:
+                code_to_idx = pickle.load(f)
+        elif os.path.exists(idx_path_json):
+            # Fallback to old JSON format
             import json
-            with open(idx_path, "r") as f:
+            with open(idx_path_json, "r") as f:
                 code_to_idx = json.load(f)
+        idx_time = time.time() - idx_start
         
-        # Load codes array (for idx->code) - use binary pickle for speed
+        # Load codes array (for idx->code) - pickle can be slow for large arrays
+        codes_start = time.time()
         codes_array = None
         codes_path_pkl = path.replace(".pkl.gz", "_codes.pkl")
         codes_path_npy = path.replace(".pkl.gz", "_codes.npy")  # Old format fallback
         codes_path_gz = path.replace(".pkl.gz", "_codes.txt.gz")  # Older format fallback
         
         if os.path.exists(codes_path_pkl):
-            # Fast binary pickle format
+            # Binary pickle format
             with open(codes_path_pkl, "rb") as f:
                 codes_array = pickle.load(f)
         elif os.path.exists(codes_path_npy):
@@ -483,6 +492,10 @@ class SparseGraphOntology:
             print(f"Loading codes array from {codes_path_gz} (old format)...")
             with gzip.open(codes_path_gz, "rt", encoding="utf-8") as f:
                 codes_array = [line.rstrip("\n") for line in f]
+        codes_time = time.time() - codes_start
+        
+        # Print timing breakdown
+        print(f"  Breakdown: Matrix={matrix_time:.2f}s, Index={idx_time:.2f}s, Codes={codes_time:.2f}s")
         
         code_trie = None  # Not using trie anymore
         
