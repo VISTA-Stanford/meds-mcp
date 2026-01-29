@@ -17,6 +17,10 @@ import numpy as np
 import scipy.sparse as sp
 import polars as pl
 import pyarrow.parquet as pq
+try:
+    import marisa_trie
+except ImportError:
+    marisa_trie = None
 
 
 class SparseGraphOntology:
@@ -38,13 +42,31 @@ class SparseGraphOntology:
         idx_to_code: Dict[int, str],
         parent_matrix: Optional[sp.csr_matrix] = None,
         graph_path: Optional[str] = None,
+        code_trie: Optional[Any] = None,
+        codes_array: Optional[List[str]] = None,
     ):
         self.concepts_df = concepts_df
-        self.code_to_idx = code_to_idx
-        self.idx_to_code = idx_to_code
+        self.code_to_idx = code_to_idx  # Fallback dict
+        self.idx_to_code = idx_to_code  # Fallback dict
+        self._code_trie = code_trie  # Optimized trie for code->idx
+        self._codes_array = codes_array  # Optimized array for idx->code
         self._parent_matrix = parent_matrix
         self.graph_path = graph_path
         self._description_cache: Dict[str, str] = {}
+    
+    def _get_idx(self, code: str) -> Optional[int]:
+        """Get index for code using dict (fast enough)."""
+        return self.code_to_idx.get(code)
+    
+    def _get_code(self, idx: int) -> Optional[str]:
+        """Get code for index using array if available, else dict."""
+        if self._codes_array is not None:
+            if 0 <= idx < len(self._codes_array):
+                return self._codes_array[idx]
+            return None
+        if self.idx_to_code is not None:
+            return self.idx_to_code.get(idx)
+        return None
     
     @classmethod
     def load_from_parquet(
@@ -61,60 +83,71 @@ class SparseGraphOntology:
             graph_path: Optional path to pre-computed sparse graph file
             load_graph: If True, load graph (lazy if graph_path provided)
         """
-        start_time = time.time()
-        
-        # Load concepts metadata as LazyFrame (not materialized)
-        concepts_table = pq.read_table(os.path.join(parquet_path, "descriptions.parquet"))
-        concepts_df = pl.from_arrow(concepts_table).lazy()
-        
-        # Build code index (small - just mappings)
-        codes = concepts_table["code"].to_pylist()
-        code_to_idx = {code: idx for idx, code in enumerate(codes)}
-        idx_to_code = {idx: code for idx, code in enumerate(codes)}
-        
-        print(f"Loaded metadata in {time.time() - start_time:.2f}s")
+        # Keep metadata truly lazy - just store path, scan on demand
+        descriptions_path = os.path.join(parquet_path, "descriptions.parquet")
+        concepts_df = pl.scan_parquet(descriptions_path)  # Truly lazy, no I/O yet
         
         # Load or build sparse graph
         parent_matrix = None
+        loaded_code_to_idx = {}
+        loaded_codes_array = None
+        
         if load_graph:
-            if graph_path and os.path.exists(graph_path):
-                print(f"Loading sparse graph from {graph_path}...")
+            matrix_path = graph_path.replace(".pkl.gz", ".npz") if graph_path else None
+            if matrix_path and os.path.exists(matrix_path):
+                print(f"Loading sparse graph from {matrix_path}...")
                 graph_start = time.time()
-                parent_matrix = cls._load_sparse_graph(graph_path)
+                parent_matrix, loaded_code_to_idx, _, loaded_codes_array = cls._load_sparse_graph(graph_path)
                 print(f"Sparse graph loaded in {time.time() - graph_start:.2f}s")
             else:
                 print("Building sparse graph from parquet (this may take a minute)...")
                 graph_start = time.time()
+                # Build code_to_idx from parquet (minimal - just codes)
+                codes_df = pl.scan_parquet(descriptions_path).select("code").collect()
+                codes = codes_df["code"].to_list()
+                code_to_idx = {code: idx for idx, code in enumerate(codes)}
+                # Build codes_array for fast idx->code lookup
+                codes_array = codes  # Already in order
                 parent_matrix = cls._build_sparse_graph_from_parquet(parquet_path, code_to_idx)
                 if graph_path:
                     cls._save_sparse_graph(parent_matrix, code_to_idx, graph_path)
-                    print(f"Sparse graph saved to {graph_path}")
+                    print(f"Sparse graph saved")
                 print(f"Sparse graph built in {time.time() - graph_start:.2f}s")
+                loaded_code_to_idx = code_to_idx
+                loaded_codes_array = codes_array
+        
+        # Use loaded mappings from graph file
+        final_code_to_idx = loaded_code_to_idx
+        final_idx_to_code = None  # Not needed if we have codes_array
         
         return cls(
             concepts_df=concepts_df,
-            code_to_idx=code_to_idx,
-            idx_to_code=idx_to_code,
+            code_to_idx=final_code_to_idx,
+            idx_to_code=final_idx_to_code,
             parent_matrix=parent_matrix,
             graph_path=graph_path,
+            code_trie=None,
+            codes_array=loaded_codes_array,
         )
     
     @property
     def parent_matrix(self) -> sp.csr_matrix:
         """Lazy-load sparse graph if not already loaded."""
         if self._parent_matrix is None:
-            if self.graph_path and os.path.exists(self.graph_path):
+            if self.graph_path:
                 print(f"Lazy-loading sparse graph from {self.graph_path}...")
-                self._parent_matrix = self._load_sparse_graph(self.graph_path)
+                matrix, _, _, _ = self._load_sparse_graph(self.graph_path)
+                self._parent_matrix = matrix
             else:
                 raise RuntimeError("Graph not available and no graph_path provided")
         return self._parent_matrix
     
     def get_description(self, code: str) -> Optional[str]:
-        """Get description for a code using Polars."""
+        """Get description for a code using Polars (lazy, queries on-demand)."""
         if code in self._description_cache:
             return self._description_cache[code]
         
+        # Lazy query - Polars will scan parquet and filter efficiently
         result = (
             self.concepts_df
             .filter(pl.col("code") == code)
@@ -127,6 +160,35 @@ class SparseGraphOntology:
             self._description_cache[code] = desc
             return desc
         return None
+    
+    def get_descriptions_batch(self, codes: List[str]) -> Dict[str, str]:
+        """Get descriptions for multiple codes efficiently using Polars join."""
+        # Filter out cached
+        uncached = [c for c in codes if c not in self._description_cache]
+        if not uncached:
+            return {c: self._description_cache[c] for c in codes}
+        
+        # Batch query using Polars filter with is_in
+        result = (
+            self.concepts_df
+            .filter(pl.col("code").is_in(uncached))
+            .select(["code", "description"])
+            .collect()
+        )
+        
+        # Update cache and return
+        descriptions = {}
+        for row in result.rows():
+            code, desc = row
+            self._description_cache[code] = desc
+            descriptions[code] = desc
+        
+        # Add cached results
+        for code in codes:
+            if code in self._description_cache:
+                descriptions[code] = self._description_cache[code]
+        
+        return descriptions
     
     def get_parents(
         self,
@@ -147,17 +209,21 @@ class SparseGraphOntology:
         Returns:
             Set of parent codes matching the filters
         """
-        if code not in self.code_to_idx:
+        idx = self._get_idx(code)
+        if idx is None:
             return set()
         
-        idx = self.code_to_idx[code]
         matrix = self.parent_matrix
         
         # Get parent indices (non-zero entries in this row)
         parent_indices = matrix[idx].indices
         
         # Convert indices back to codes
-        parents = {self.idx_to_code[i] for i in parent_indices if i in self.idx_to_code}
+        parents = set()
+        for i in parent_indices:
+            parent_code = self._get_code(i)
+            if parent_code:
+                parents.add(parent_code)
         
         # Apply vocabulary filter if specified
         if vocabularies:
@@ -174,10 +240,10 @@ class SparseGraphOntology:
     
     def get_children(self, code: str) -> Set[str]:
         """Get immediate children using sparse matrix transpose."""
-        if code not in self.code_to_idx:
+        idx = self._get_idx(code)
+        if idx is None:
             return set()
         
-        idx = self.code_to_idx[code]
         matrix = self.parent_matrix
         
         # Transpose to get children (non-zero entries in this column)
@@ -186,7 +252,12 @@ class SparseGraphOntology:
         csc_matrix = matrix.tocsc()
         child_indices = csc_matrix[:, idx].indices
         
-        return {self.idx_to_code[i] for i in child_indices if i in self.idx_to_code}
+        children = set()
+        for i in child_indices:
+            child_code = self._get_code(i)
+            if child_code:
+                children.add(child_code)
+        return children
     
     def get_ancestor_subgraph(
         self,
@@ -233,7 +304,7 @@ class SparseGraphOntology:
                 continue
             
             visited.add(current_idx)
-            current_code = self.idx_to_code.get(current_idx)
+            current_code = self._get_code(current_idx)
             if current_code is None:
                 continue
             
@@ -245,7 +316,11 @@ class SparseGraphOntology:
             
             # Get parents
             parent_indices = matrix[current_idx].indices
-            parent_codes = {self.idx_to_code[i] for i in parent_indices if i in self.idx_to_code}
+            parent_codes = set()
+            for i in parent_indices:
+                parent_code = self._get_code(i)
+                if parent_code:
+                    parent_codes.add(parent_code)
             
             # Filter parents by vocabulary
             if vocabularies:
@@ -321,39 +396,94 @@ class SparseGraphOntology:
         code_to_idx: Dict[str, int],
         path: str,
     ):
-        """Save sparse graph to disk."""
+        """Save sparse graph to disk using numpy's native format and marisa-trie."""
+        import numpy as np
+        
         dir_path = os.path.dirname(path)
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
         
-        print(f"Saving sparse graph to {path}...")
+        # Save matrix using scipy's native format (much faster than pickle)
+        matrix_path = path.replace(".pkl.gz", ".npz")
+        print(f"Saving sparse matrix to {matrix_path}...")
+        sp.save_npz(matrix_path, matrix, compressed=True)
         
-        # Save as compressed numpy format (much faster than pickle)
-        save_dict = {
-            "matrix_data": matrix.data,
-            "matrix_indices": matrix.indices,
-            "matrix_indptr": matrix.indptr,
-            "matrix_shape": matrix.shape,
-            "code_to_idx": code_to_idx,
-        }
+        # Save code_to_idx as simple JSON (Python dicts are already fast)
+        idx_path = path.replace(".pkl.gz", "_index.json")
+        import json
+        print(f"Saving code index to {idx_path}...")
+        with open(idx_path, "w") as f:
+            json.dump(code_to_idx, f)
         
-        with gzip.open(path, "wb") as f:
-            pickle.dump(save_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+        # Build codes array for idx->code - use compressed format
+        # Store as newline-separated text file (much smaller than numpy object array)
+        n_codes = len(code_to_idx)
+        codes_array = [""] * n_codes
+        for code, idx in code_to_idx.items():
+            if 0 <= idx < n_codes:
+                codes_array[idx] = code
         
-        if os.path.exists(path):
-            file_size_mb = os.path.getsize(path) / 1024 / 1024
-            print(f"Sparse graph saved ({file_size_mb:.1f} MB)")
+        # Save codes as binary pickle (faster than JSON, smaller than numpy object array)
+        # Use protocol 5 (binary) for speed
+        codes_path = path.replace(".pkl.gz", "_codes.pkl")
+        print(f"Saving codes array to {codes_path}...")
+        with open(codes_path, "wb") as f:
+            pickle.dump(codes_array, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        # Calculate total size
+        total_size = 0
+        if os.path.exists(matrix_path):
+            total_size += os.path.getsize(matrix_path)
+        if os.path.exists(codes_path):
+            total_size += os.path.getsize(codes_path)
+        if os.path.exists(idx_path):
+            total_size += os.path.getsize(idx_path)
+        
+        print(f"Sparse graph saved ({total_size / 1024 / 1024:.1f} MB total)")
     
     @staticmethod
-    def _load_sparse_graph(path: str) -> sp.csr_matrix:
-        """Load sparse graph from disk."""
-        with gzip.open(path, "rb") as f:
-            data = pickle.load(f)
+    def _load_sparse_graph(path: str) -> tuple[sp.csr_matrix, Dict[str, int], Any, List[str]]:
+        """Load sparse graph from disk using numpy's native format and marisa-trie."""
+        # Load matrix using scipy's native format
+        matrix_path = path.replace(".pkl.gz", ".npz")
+        if not os.path.exists(matrix_path):
+            # Fallback: try old pickle format
+            if os.path.exists(path):
+                raise ValueError(
+                    f"Old pickle format detected at {path}. "
+                    f"Please rebuild the graph to use the new numpy format."
+                )
+            raise FileNotFoundError(f"Sparse matrix file not found: {matrix_path}")
         
-        # Reconstruct CSR matrix
-        matrix = sp.csr_matrix(
-            (data["matrix_data"], data["matrix_indices"], data["matrix_indptr"]),
-            shape=data["matrix_shape"]
-        )
+        matrix = sp.load_npz(matrix_path)
         
-        return matrix
+        # Load code_to_idx from JSON (simple and fast)
+        idx_path = path.replace(".pkl.gz", "_index.json")
+        code_to_idx = {}
+        if os.path.exists(idx_path):
+            import json
+            with open(idx_path, "r") as f:
+                code_to_idx = json.load(f)
+        
+        # Load codes array (for idx->code) - use binary pickle for speed
+        codes_array = None
+        codes_path_pkl = path.replace(".pkl.gz", "_codes.pkl")
+        codes_path_npy = path.replace(".pkl.gz", "_codes.npy")  # Old format fallback
+        codes_path_gz = path.replace(".pkl.gz", "_codes.txt.gz")  # Older format fallback
+        
+        if os.path.exists(codes_path_pkl):
+            # Fast binary pickle format
+            with open(codes_path_pkl, "rb") as f:
+                codes_array = pickle.load(f)
+        elif os.path.exists(codes_path_npy):
+            # Fallback to old numpy format
+            codes_array = np.load(codes_path_npy, allow_pickle=True).tolist()
+        elif os.path.exists(codes_path_gz):
+            # Fallback to old compressed text format
+            print(f"Loading codes array from {codes_path_gz} (old format)...")
+            with gzip.open(codes_path_gz, "rt", encoding="utf-8") as f:
+                codes_array = [line.rstrip("\n") for line in f]
+        
+        code_trie = None  # Not using trie anymore
+        
+        return matrix, code_to_idx, code_trie, codes_array
