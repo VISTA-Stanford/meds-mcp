@@ -48,6 +48,8 @@ dependencies = [
   "uvicorn[standard]>=0.22.0",
   "meilisearch>=0.31.0",
   "fastapi>=0.100.0",
+  "sentence-transformers>=2.4.0",
+  "pytest",
 ]
 
 [project.optional-dependencies]

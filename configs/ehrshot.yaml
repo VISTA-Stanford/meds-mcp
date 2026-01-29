@@ -1,0 +1,24 @@
+# MEDS MCP Server Configuration
+
+# Server settings
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# Data directories
+data:
+  ontology_dir: "data/athena_omop_ontologies"
+  corpus_dir: "data/meds/ehrshot/ehrs"
+  cache_dir: "data/cache/ehrshot/ehrs"
+  use_lazy_ontology: false
+  load_all_patients: false
+
+logging:
+  level: "INFO"
+
+meilisearch:
+  enabled: true
+  host: "http://localhost:7700"
+  index_name: "patients_ehrshot"
+  auto_index: true
+  reset_on_startup: true
