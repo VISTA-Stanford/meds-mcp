@@ -82,16 +82,18 @@ def build_global_vignette_index(
     corpus_path: Path,
     llm_adapter: SecureLLMSummarizer,
     n_encounters: int = 2,
-) -> BM25Retriever:
+    debug_output_dir: Optional[Path] = None,
+) -> tuple[BM25Retriever, Dict[str, str]]:
     """Build global BM25 index from all patient vignettes.
 
     Args:
         corpus_path: Path to corpus directory with XML files
         llm_adapter: LLM adapter for vignette generation
         n_encounters: Number of last encounters to extract
+        debug_output_dir: Optional directory to save vignettes for debugging
 
     Returns:
-        BM25Retriever with all patient vignettes indexed
+        Tuple of (BM25Retriever with all patient vignettes indexed, dict of patient_id -> vignette)
     """
     xml_files = sorted(corpus_path.glob("*.xml"))
     if not xml_files:
@@ -100,6 +102,7 @@ def build_global_vignette_index(
     print(f"\nBuilding global vignette index from {len(xml_files)} patients...")
     documents = []
     failed_count = 0
+    all_vignettes = {}
 
     for xml_path in tqdm(xml_files, desc="Generating vignettes"):
         patient_id = xml_path.stem
@@ -114,6 +117,7 @@ def build_global_vignette_index(
 
             # Generate vignette with LLM
             vignette = llm_adapter.summarize(last_encounters)
+            all_vignettes[patient_id] = vignette
 
             # Create document
             doc = Document(
@@ -136,6 +140,18 @@ def build_global_vignette_index(
 
     print(f"✓ Generated vignettes for {len(documents)} patients ({failed_count} failed)\n")
 
+    # Save vignettes for debugging if output dir specified
+    if debug_output_dir:
+        debug_output_dir.mkdir(parents=True, exist_ok=True)
+        all_vignettes_path = debug_output_dir / "all_vignettes.txt"
+        with open(all_vignettes_path, "w") as f:
+            for patient_id, vignette in sorted(all_vignettes.items()):
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Patient ID: {patient_id}\n")
+                f.write(f"{'='*80}\n")
+                f.write(f"{vignette}\n")
+        print(f"✓ Saved all vignettes to {all_vignettes_path}")
+
     # Build BM25 index
     print("Building BM25 retriever...")
     retriever = BM25Retriever.from_defaults(
@@ -144,7 +160,7 @@ def build_global_vignette_index(
     )
     print(f"✓ BM25 index built with {len(documents)} patient vignettes\n")
 
-    return retriever
+    return retriever, all_vignettes
 
 
 class SimpleBM25Indexer:
@@ -248,6 +264,12 @@ def main():
         default="apim:gpt-4.1-mini",
         help="LLM model to use for vignette generation",
     )
+    parser.add_argument(
+        "--debug-dir",
+        type=str,
+        default="data/vignette_debug",
+        help="Directory to save vignettes for debugging (default: data/vignette_debug)",
+    )
 
     args = parser.parse_args()
 
@@ -272,7 +294,11 @@ def main():
     print(f"Last N encounters: {args.n_encounters}")
     print(f"LLM model: {args.llm_model}")
     print(f"Top-k results: {args.top_k}")
+    print(f"Debug output dir: {args.debug_dir}")
     print("="*80)
+
+    # Create debug directory
+    debug_dir = Path(args.debug_dir)
 
     # Initialize LLM
     try:
@@ -287,10 +313,11 @@ def main():
 
     # Build global vignette index
     try:
-        global_retriever = build_global_vignette_index(
+        global_retriever, all_vignettes = build_global_vignette_index(
             corpus_path,
             llm_adapter,
             n_encounters=args.n_encounters,
+            debug_output_dir=debug_dir,
         )
     except Exception as e:
         print(f"❌ Failed to build global index: {e}")
@@ -325,6 +352,15 @@ def main():
         print(f"    Preview (first 300 chars):")
         print(f"    {query_vignette[:300]}...")
 
+        # Save query vignette for debugging
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        query_vignette_path = debug_dir / f"query_vignette_{args.patient_id}.txt"
+        with open(query_vignette_path, "w") as f:
+            f.write(f"Query Patient ID: {args.patient_id}\n")
+            f.write(f"{'='*80}\n\n")
+            f.write(f"{query_vignette}\n")
+        print(f"    ✓ Saved query vignette to {query_vignette_path}")
+
     except Exception as e:
         print(f"❌ Error processing query patient: {e}")
         import traceback
@@ -345,6 +381,22 @@ def main():
     print(f"{'-'*80}\n")
 
     if results:
+        # Save results to file for debugging
+        results_path = debug_dir / f"search_results_{args.patient_id}.txt"
+        with open(results_path, "w") as f:
+            f.write(f"Query Patient: {args.patient_id}\n")
+            f.write(f"Number of Results: {len(results)}\n")
+            f.write(f"{'='*80}\n\n")
+
+            for i, result in enumerate(results, 1):
+                f.write(f"{i}. Patient {result['patient_id']}\n")
+                f.write(f"   BM25 Score: {result['score']:.4f}\n")
+                f.write(f"   Vignette:\n")
+                f.write(f"   {result['vignette']}\n")
+                f.write(f"\n{'-'*80}\n\n")
+
+        print(f"✓ Saved search results to {results_path}\n")
+
         for i, result in enumerate(results, 1):
             print(f"{i}. Patient {result['patient_id']}")
             print(f"   BM25 Score: {result['score']:.4f}")
