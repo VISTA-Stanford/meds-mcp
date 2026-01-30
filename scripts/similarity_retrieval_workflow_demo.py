@@ -14,13 +14,21 @@ Note: Requires VAULT_SECRET_KEY environment variable for LLM access
 
 Usage:
     python scripts/similarity_retrieval_workflow_demo.py \
-        --patient-id 115969130 \
-        --corpus-dir data/collections/dev-corpus \
+        --patient-id 135908719 \
+        --config configs/vista.yaml \
         --n-encounters 2 \
-        --top-k 2 \
+        --top-k 5 \
         --llm-model apim:gpt-4.1-mini \
         --use-dspy
+
+    Or override corpus directory:
+        python scripts/similarity_retrieval_workflow_demo.py \
+            --patient-id 135908719 \
+            --corpus-dir data/collections/dev-corpus \
+            --n-encounters 2
 """
+
+
 
 import os
 import sys
@@ -39,13 +47,27 @@ from llama_index.retrievers.bm25 import BM25Retriever
 from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
 
 
-def load_config():
-    """Load corpus directory from config."""
-    config_path = Path("configs/medalign.yaml")
+def load_config(config_file: Optional[str] = None) -> str:
+    """Load corpus directory from config.
+
+    Args:
+        config_file: Optional path to config file (defaults to configs/medalign.yaml)
+
+    Returns:
+        Corpus directory path from config or environment
+    """
+    if config_file:
+        config_path = Path(config_file)
+    else:
+        config_path = Path("configs/medalign.yaml")
+
     if config_path.exists():
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f) or {}
         return cfg.get("data", {}).get("corpus_dir", "data/collections/dev-corpus")
+
+    if config_file:
+        print(f"⚠️  Config file not found: {config_file}, falling back to environment")
     return os.getenv("DATA_DIR", "data/collections/dev-corpus")
 
 
@@ -241,10 +263,16 @@ def main():
         help="Query patient ID",
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config YAML file (defaults to configs/medalign.yaml)",
+    )
+    parser.add_argument(
         "--corpus-dir",
         type=str,
         default=None,
-        help="Corpus directory (defaults to config or DATA_DIR)",
+        help="Corpus directory (overrides config, defaults to config or DATA_DIR)",
     )
     parser.add_argument(
         "--n-encounters",
@@ -284,7 +312,7 @@ def main():
         return
 
     # Resolve corpus directory
-    corpus_dir = args.corpus_dir or load_config()
+    corpus_dir = args.corpus_dir or load_config(args.config)
     corpus_path = Path(corpus_dir)
 
     if not corpus_path.exists():
@@ -294,6 +322,8 @@ def main():
     print("\n" + "="*80)
     print("SIMPLIFIED PATIENT SIMILARITY WORKFLOW DEMO")
     print("="*80)
+    if args.config:
+        print(f"Config: {args.config}")
     print(f"Corpus: {corpus_dir}")
     print(f"Query patient: {args.patient_id}")
     print(f"Last N encounters: {args.n_encounters}")

@@ -10,9 +10,9 @@ data:
   # Ontology data directory
   ontology_dir: "data/athena_omop_ontologies"
   # Corpus/collections directory
-  corpus_dir: "data/vista_bench/thoracic_cohort_lumia"
+  corpus_dir: "data/collections/vista_bench/thoracic_cohort_lumia"
   # Cache directory for document store indexes
-  cache_dir: "data/cache/vista_bench"
+  cache_dir: "data/cache/vista_bench_thoracic_cohort_lumia_indexes"
   # Use lazy loading for ontology (true/false)
   use_lazy_ontology: false
   # Load all patients on initialization (development only)

@@ -8,8 +8,8 @@ server:
 # Data directories
 data:
   ontology_dir: "data/athena_omop_ontologies"
-  corpus_dir: "data/meds/ehrshot/ehrs"
-  cache_dir: "data/cache/ehrshot/ehrs"
+  corpus_dir: "data/collections/meds/ehrshot/ehrs"
+  cache_dir: "data/cache/ehrshot_indexes"
   use_lazy_ontology: false
   load_all_patients: false
 

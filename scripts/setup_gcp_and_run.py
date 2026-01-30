@@ -44,7 +44,6 @@ import argparse
 import os
 import sys
 import subprocess
-import shutil
 from pathlib import Path
 from typing import Optional
 

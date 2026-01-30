@@ -10,9 +10,9 @@ data:
   # Ontology data directory
   ontology_dir: "data/athena_omop_ontologies"
   # Corpus/collections directory
-  corpus_dir: "data/collections/debug"
+  corpus_dir: "data/collections/dev-corpus"
   # Cache directory for document store indexes
-  cache_dir: "data/cache/debug"
+  cache_dir: "data/cache/dev-corpus_indexes"
   # Use lazy loading for ontology (true/false)
   use_lazy_ontology: false
   # Load all patients on initialization (development only)
