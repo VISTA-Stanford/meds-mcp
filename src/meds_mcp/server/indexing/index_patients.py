@@ -68,7 +68,9 @@ def parse_patient_xml(filepath: Path) -> Dict[str, Any]:
     tree = etree.parse(str(filepath))
     root = tree.getroot()
 
-    person_id = root.attrib.get("person_id")
+    # person_id = root.attrib.get("person_id")
+    person_id = filepath.stem
+
     gender: Optional[str] = None
     ethnicity: Optional[str] = None
     age: Optional[int] = None
