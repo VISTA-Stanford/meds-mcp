@@ -29,58 +29,14 @@ class SecureLLMSummarizer:
         self.client = get_llm_client(model_name=model)
         self.model = model
         self.system_prompt = system_prompt or (
-            "You are generating a clinical vignette for patient similarity retrieval. "
-            "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language. "
-            "Preserve all explicitly stated clinical information, including conditions, symptoms, procedures, medications, and key findings. "
-            "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
-            "Avoid speculation, causal claims, or diagnostic reasoning beyond what is stated. "
-            "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-            "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
+            "You are generating a clinical vignette for patient similarity retrieval to support tumor board discussion in thoracic oncology. "
+            "Rewrite the following patient timeline into a concise, factual clinical vignette written in professional clinical language appropriate for a multidisciplinary tumor board. "
+            "Focus on key clinical landmarks relevant to thoracic cancer, including diagnosis and staging (when stated), treatments and treatment changes, response or progression events, major comorbidities, and clinically significant laboratory, imaging, or pathology results when explicitly mentioned. "
+            "Preserve all explicitly stated information and do not add, infer, or reinterpret any details. Do not speculate, assign causality, or introduce unstated clinical reasoning. "
+            "Exclude administrative details and minor events unless clinically relevant. Include laboratory or imaging results only if they are explicitly reported and materially relevant to disease status or treatment decisions. "
+            "Do not describe the timeline itself. Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
+            "The output should be a single neutral paragraph of 3–5 sentences, suitable for review by a tumor board."
         )
-
-        # # Diagnosis-focused similarity system prompt
-        # self.system_prompt = system_prompt or (
-        #     "You are generating a clinical vignette for patient similarity retrieval focused on diagnosis. "
-        #     "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language, emphasizing diagnosed conditions and supporting clinical findings. "
-        #     "Preserve all explicitly stated clinical information, including conditions, symptoms, diagnostic findings, procedures, medications, and key results. "
-        #     "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
-        #     "Avoid speculation, causal claims, or diagnostic reasoning beyond what is explicitly stated. "
-        #     "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-        #     "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
-        # )
-
-        # # Presentation-focused similarity system prompt
-        # self.system_prompt = system_prompt or (
-        #     "You are generating a clinical vignette for patient similarity retrieval focused on clinical presentation. "
-        #     "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language, emphasizing presenting symptoms, signs, and initial clinical findings. "
-        #     "Preserve all explicitly stated clinical information, including symptoms, early findings, conditions, procedures, medications, and key results. "
-        #     "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
-        #     "Avoid speculation, causal claims, or diagnostic reasoning beyond what is explicitly stated. "
-        #     "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-        #     "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
-        # )
-
-        # # Treatment-focused similarity system prompt
-        # self.system_prompt = system_prompt or (
-        #     "You are generating a clinical vignette for patient similarity retrieval focused on treatment and management. "
-        #     "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language, emphasizing procedures, medications, and other therapeutic interventions. "
-        #     "Preserve all explicitly stated clinical information, including treatments, conditions, symptoms, procedures, medications, and key findings. "
-        #     "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
-        #     "Avoid speculation, causal claims, or statements about treatment effectiveness beyond what is explicitly stated. "
-        #     "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-        #     "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
-        # )
-
-        # Trajectory / outcome-focused similarity system prompt
-        # self.system_prompt = system_prompt or (
-        #     "You are generating a clinical vignette for patient similarity retrieval focused on clinical trajectory. "
-        #     "Rewrite the following patient timeline into a concise, factual clinical vignette written in plain clinical language, emphasizing changes in clinical state, progression, stability, or outcomes over time. "
-        #     "Preserve all explicitly stated clinical information, including conditions, symptoms, procedures, medications, findings, and outcomes. "
-        #     "Do not describe the timeline itself, and do not add, infer, or reinterpret any information. "
-        #     "Avoid speculation, causal claims, or explanatory reasoning beyond what is explicitly stated. "
-        #     "Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-        #     "The output should be a short paragraph of 3–5 sentences in neutral, note-like clinical language."
-        # )
 
         self.gen_config = get_default_generation_config(generation_overrides)
 
