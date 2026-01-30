@@ -18,7 +18,8 @@ Usage:
         --corpus-dir data/collections/dev-corpus \
         --n-encounters 2 \
         --top-k 2 \
-        --llm-model apim:gpt-4.1-mini
+        --llm-model apim:gpt-4.1-mini \
+        --use-dspy
 """
 
 import os
@@ -237,7 +238,6 @@ def main():
     parser.add_argument(
         "--patient-id",
         type=str,
-        default="115969130",
         help="Query patient ID",
     )
     parser.add_argument(
@@ -270,6 +270,11 @@ def main():
         default="data/vignette_debug",
         help="Directory to save vignettes for debugging (default: data/vignette_debug)",
     )
+    parser.add_argument(
+        "--use-dspy",
+        action="store_true",
+        help="Use DSPy for structured prompting (requires: pip install dspy-ai)",
+    )
 
     args = parser.parse_args()
 
@@ -295,6 +300,10 @@ def main():
     print(f"LLM model: {args.llm_model}")
     print(f"Top-k results: {args.top_k}")
     print(f"Debug output dir: {args.debug_dir}")
+    if args.use_dspy:
+        print(f"Prompting: DSPy (structured)")
+    else:
+        print(f"Prompting: Standard")
     print("="*80)
 
     # Create debug directory
@@ -305,8 +314,11 @@ def main():
         llm_adapter = SecureLLMSummarizer(
             model=args.llm_model,
             generation_overrides={"max_tokens": 512, "temperature": 0.1},
+            use_dspy=args.use_dspy,
         )
         print(f"\n✓ LLM initialized with {args.llm_model}")
+        if args.use_dspy:
+            print("✓ DSPy structured prompting enabled")
     except Exception as e:
         print(f"❌ Failed to initialize LLM: {e}")
         return

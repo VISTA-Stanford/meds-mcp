@@ -50,6 +50,7 @@ dependencies = [
   "fastapi>=0.100.0",
   "sentence-transformers>=2.4.0",
   "pytest",
+  "dspy",
 ]
 
 [project.optional-dependencies]
