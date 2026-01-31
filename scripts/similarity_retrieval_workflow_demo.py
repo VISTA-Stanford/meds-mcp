@@ -15,7 +15,7 @@ Note: Requires VAULT_SECRET_KEY environment variable for LLM access
 Usage:
     python scripts/similarity_retrieval_workflow_demo.py \
         --patient-id 135908719 \
-        --config configs/vista.yaml \
+        --config configs/dev.yaml \
         --n-encounters 2 \
         --top-k 5 \
         --llm-model apim:gpt-4.1-mini \
@@ -33,6 +33,7 @@ Usage:
 import os
 import sys
 import argparse
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import yaml
@@ -45,6 +46,14 @@ from llama_index.core.schema import Document
 from llama_index.retrievers.bm25 import BM25Retriever
 
 from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
+
+# Import rate limit error for handling
+try:
+    from securellm.exceptions import RateLimitError
+except ImportError:
+    # Fallback if exception naming differs
+    class RateLimitError(Exception):
+        pass
 
 
 def load_config(config_file: Optional[str] = None) -> str:
@@ -138,8 +147,25 @@ def build_global_vignette_index(
                 failed_count += 1
                 continue
 
-            # Generate vignette with LLM
-            vignette = llm_adapter.summarize(last_encounters)
+            # Generate vignette with LLM (with rate limit handling)
+            max_retries = 3
+            retry_count = 0
+            vignette = None
+
+            while retry_count < max_retries:
+                try:
+                    vignette = llm_adapter.summarize(last_encounters)
+                    break  # Success, exit retry loop
+                except RateLimitError as e:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        raise  # Give up after max retries
+
+                    wait_time = 65  # API says wait 60 seconds, add buffer
+                    tqdm.write(f"\n⏱️  Rate limit hit for {patient_id}. Waiting {wait_time}s before retry {retry_count}/{max_retries}...")
+                    time.sleep(wait_time)
+                    tqdm.write(f"✓ Resuming after rate limit pause\n")
+
             all_vignettes[patient_id] = vignette
 
             # Create document
@@ -154,6 +180,9 @@ def build_global_vignette_index(
             )
             documents.append(doc)
 
+        except RateLimitError as e:
+            failed_count += 1
+            tqdm.write(f"  ❌ Rate limit exceeded for {patient_id} after retries: {e}")
         except Exception as e:
             failed_count += 1
             tqdm.write(f"  ⚠️  Failed {patient_id}: {e}")
