@@ -16,7 +16,7 @@ A lightweight, modern React-based chat interface for interacting with patient re
 
 ```bash
 # From the project root
-python examples/mcp_chat_demo/chat/ui/run_react_app.py \
+uv run python examples/mcp_chat_demo/chat/ui/run_react_app.py \
     --model "apim:gpt-4.1" \
     --mcp_url "http://localhost:8000/mcp" \
     --patient_id 127672063

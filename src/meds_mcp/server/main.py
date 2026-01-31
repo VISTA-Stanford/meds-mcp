@@ -15,6 +15,7 @@ import os
 os.environ["JAX_PLATFORMS"] = "cpu"  # Suppress TPU warnings
 
 import asyncio
+import sys
 import uvicorn
 import yaml
 import logging
@@ -243,6 +244,8 @@ def main():
         reindex_patients,
     )
 
+    print("📦 Loading readmission tool...", flush=True)
+    from meds_mcp.server.tools.readmission import get_readmission_prediction
 
     # Initialize server components
     print("🚀 Initializing server components...", flush=True)
@@ -276,6 +279,9 @@ def main():
 
     search_patients_tool = mcp.tool("search_patients")(search_patients)
     reindex_patients_tool = mcp.tool("reindex_patients")(reindex_patients)
+    get_readmission_prediction_tool = mcp.tool("get_readmission_prediction")(
+        get_readmission_prediction
+    )
 
     print("🔧 Registering MCP tools...", flush=True)
     print("✅ All tools registered", flush=True)

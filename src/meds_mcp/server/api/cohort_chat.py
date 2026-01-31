@@ -1,5 +1,10 @@
 # src/meds_mcp/server/api/cohort_chat.py
 
+import sys
+import json
+import asyncio
+from pathlib import Path
+from typing import List, Optional, Dict, Any
 from typing import List, Optional, Dict, Any
 import json
 import datetime as dt
@@ -8,16 +13,81 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import logging
-from fastapi import HTTPException
 
 from meds_mcp.server.rag.simple_storage import (
     get_all_patient_events,
 )
-from examples.mcp_chat_demo.chat.llm.secure_llm_client import (
+from meds_mcp.server.tools.readmission import get_readmission_prediction
+
+# Add examples directory to path for secure_llm_client import
+# This allows the import to work when running from the server
+# From src/meds_mcp/server/api/cohort_chat.py, we need to go up 5 levels to reach project root
+_project_root = Path(__file__).parent.parent.parent.parent.parent
+_examples_path = _project_root / "examples" / "mcp_chat_demo"
+if str(_examples_path) not in sys.path:
+    sys.path.insert(0, str(_examples_path))
+
+from chat.llm.secure_llm_client import (
     get_llm_client,
     extract_response_content,
     get_default_generation_config,
 )
+from chat.llm.chat import (
+    get_calculator_tool_definition,
+    execute_tool_call,
+    _is_simple_calculation,
+)
+
+
+def get_readmission_tool_definition() -> Dict[str, Any]:
+    """OpenAI-format tool definition for readmission prediction lookup."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_readmission_prediction",
+            "description": (
+                "Look up the predicted readmission label for a patient in the cohort from the readmission labels dataset. "
+                "Use this when the user asks whether a patient (or patients) is predicted to have readmission, "
+                "or about readmission risk/prediction for the cohort. Pass the patient_id (one of the cohort patient IDs)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "description": "Patient ID to look up (use one of the patient IDs in the cohort, e.g. from the cohort data).",
+                    }
+                },
+                "required": ["person_id"],
+            },
+        },
+    }
+
+
+async def execute_cohort_tool_call(
+    tool_call_dict: Dict[str, Any],
+    patient_ids: List[str],
+) -> str:
+    """
+    Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
+    and delegates others (e.g. calculator) to the sync execute_tool_call.
+    """
+    name = (tool_call_dict.get("function") or {}).get("name", "")
+    raw_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
+    try:
+        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except json.JSONDecodeError:
+        return f"Error: Invalid arguments for {name}"
+
+    if name == "get_readmission_prediction":
+        person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
+        if not person_id:
+            return json.dumps({"error": "No person_id provided and cohort has no patient IDs.", "readmission": None})
+        result = await get_readmission_prediction(person_id)
+        return json.dumps(result)
+
+    return execute_tool_call(tool_call_dict)
+
 
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
