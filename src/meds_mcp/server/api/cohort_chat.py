@@ -2,6 +2,7 @@
 
 import sys
 import json
+import asyncio
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from typing import List, Optional, Dict, Any
@@ -16,6 +17,7 @@ import logging
 from meds_mcp.server.rag.simple_storage import (
     get_all_patient_events,
 )
+from meds_mcp.server.tools.readmission import get_readmission_prediction
 
 # Add examples directory to path for secure_llm_client import
 # This allows the import to work when running from the server
@@ -35,6 +37,57 @@ from chat.llm.chat import (
     execute_tool_call,
     _is_simple_calculation,
 )
+
+
+def get_readmission_tool_definition() -> Dict[str, Any]:
+    """OpenAI-format tool definition for readmission prediction lookup."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_readmission_prediction",
+            "description": (
+                "Look up the predicted readmission label for a patient in the cohort from the readmission labels dataset. "
+                "Use this when the user asks whether a patient (or patients) is predicted to have readmission, "
+                "or about readmission risk/prediction for the cohort. Pass the patient_id (one of the cohort patient IDs)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "description": "Patient ID to look up (use one of the patient IDs in the cohort, e.g. from the cohort data).",
+                    }
+                },
+                "required": ["person_id"],
+            },
+        },
+    }
+
+
+async def execute_cohort_tool_call(
+    tool_call_dict: Dict[str, Any],
+    patient_ids: List[str],
+) -> str:
+    """
+    Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
+    and delegates others (e.g. calculator) to the sync execute_tool_call.
+    """
+    name = (tool_call_dict.get("function") or {}).get("name", "")
+    raw_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
+    try:
+        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except json.JSONDecodeError:
+        return f"Error: Invalid arguments for {name}"
+
+    if name == "get_readmission_prediction":
+        person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
+        if not person_id:
+            return json.dumps({"error": "No person_id provided and cohort has no patient IDs.", "readmission": None})
+        result = await get_readmission_prediction(person_id)
+        return json.dumps(result)
+
+    return execute_tool_call(tool_call_dict)
+
 
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
