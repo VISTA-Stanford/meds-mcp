@@ -11,7 +11,7 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import networkx as nx
-from typing import Dict, Optional, Iterable, Set, Type, Any, Union
+from typing import Dict, Optional, Iterable, Set, Type, Any, Union, List
 
 # Import the module to access the global ontology
 import meds_mcp.server.globals as globals_module
@@ -642,8 +642,11 @@ class LazyAthenaOntology:
                 code_col = pl.col("vocabulary_id") + "/" + pl.col("concept_code")
                 concept_id_col = pl.col("concept_id").cast(pl.Int64)
 
-                # Collect only the mapping data, not full descriptions
-                mapping_data = (
+                # Collect mapping data ONCE (optimize: don't collect twice!)
+                import time
+                start_map = time.time()
+                print("  Building concept_id <-> code mappings (this may take a minute)...")
+                mapping_df = (
                     concepts_df.select(
                         [
                             code_col.alias("code"),
@@ -651,30 +654,30 @@ class LazyAthenaOntology:
                         ]
                     )
                     .collect()
-                    .rows()
                 )
+                map_time = time.time() - start_map
+                print(f"  Collected mappings in {map_time:.1f}s")
 
                 concept_id_to_code_map = {}
                 code_to_concept_id_map = {}
 
-                for code, concept_id in mapping_data:
+                # Build mappings from single collection
+                start_build = time.time()
+                for row in mapping_df.rows():
+                    code, concept_id = row
                     if code and concept_id is not None:
                         concept_id_to_code_map[concept_id] = code
                         code_to_concept_id_map[code] = concept_id
-
-                # Add OMOP concept_id mappings (only if not already mapped)
-                omop_mapping_data = (
-                    concepts_df.select([concept_id_col]).collect().rows()
-                )
-
-                for (concept_id,) in omop_mapping_data:
-                    if (
-                        concept_id is not None
-                        and concept_id not in concept_id_to_code_map
-                    ):
+                        
+                        # Also add OMOP concept_id mapping
                         omop_code = f"OMOP_CONCEPT_ID/{concept_id}"
-                        concept_id_to_code_map[concept_id] = omop_code
-                        code_to_concept_id_map[omop_code] = concept_id
+                        if concept_id not in concept_id_to_code_map or concept_id_to_code_map[concept_id] == code:
+                            # Only add OMOP mapping if concept_id not already mapped to a vocabulary code
+                            concept_id_to_code_map[concept_id] = code  # Prefer vocabulary code
+                            code_to_concept_id_map[omop_code] = concept_id
+                
+                build_time = time.time() - start_build
+                print(f"  Built {len(code_to_concept_id_map):,} code mappings in {build_time:.1f}s")
 
                 # Load relationship and ancestor dataframes lazily
                 relationships_df = reader.read_csv("CONCEPT_RELATIONSHIP.csv")

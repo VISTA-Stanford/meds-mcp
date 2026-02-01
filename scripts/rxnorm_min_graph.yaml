@@ -1,0 +1,125 @@
+# rxnorm_min_graph.yaml
+# Minimal RxNorm-only subgraph for modeling (rare-friendly).
+# Materialize ONLY edges where BOTH endpoints are RxNorm-family concepts.
+
+rxnorm_min_graph:
+  name: rxnorm_min_v1
+  scope:
+    vocabularies_allowlist: ["RxNorm", "RxNorm Extension"]
+    require_both_endpoints_in_allowlist: true
+
+  # Canonical directed edge types to store.
+  # (You can keep only these directions; invert at query time if needed.)
+  edges:
+    # 1) Ingredient backbone (rare-friendly hub)
+    - rel_type: HAS_INGREDIENT
+      relationship_id_allowlist:
+        - "RxNorm has ing"
+
+    # 2) Precise ingredient (salt/ester) — optional but usually worth it
+    - rel_type: HAS_PRECISE_INGREDIENT
+      relationship_id_allowlist:
+        - "Has precise ing"
+        - "Has prec ingredient"   # keep if present in your build; often overlaps
+
+    # 3) Formulation / route proxy
+    - rel_type: HAS_DOSE_FORM
+      relationship_id_allowlist:
+        - "RxNorm has dose form"
+        - "Has dose form"         # keep only if it exists in your data
+
+    # 4) Strength units (keep units as nodes; avoid value nodes)
+    - rel_type: HAS_NUMERATOR_UNIT
+      relationship_id_allowlist:
+        - "Has numerator unit"
+
+    - rel_type: HAS_DENOMINATOR_UNIT
+      relationship_id_allowlist:
+        - "Has denominator unit"
+
+    - rel_type: HAS_UNIT_OF_PRESENTATION
+      relationship_id_allowlist:
+        - "Has unit of presen"
+
+    # 5) Optional: quantified form hub (strength-aware parent)
+    - rel_type: HAS_QUANTIFIED_FORM
+      enabled: true
+      relationship_id_allowlist:
+        - "Has quantified form"
+
+    # 6) Optional: simple RxNorm hierarchy (use if you want rollups)
+    - rel_type: IS_A
+      enabled: true
+      relationship_id_allowlist:
+        - "RxNorm is a"
+        - "Is a"                  # keep only if you confirm it's RxNorm↔RxNorm within your scope
+
+    # 7) Brand name (useful for branded drugs)
+    - rel_type: HAS_BRAND_NAME
+      enabled: true
+      relationship_id_allowlist:
+        - "Has brand name"
+
+  # Explicit exclusions (to prevent accidental inclusion)
+  exclude_relationship_ids:
+    # Commercial / packaging noise
+    - "Has marketed form"
+    - "Marketed form of"
+    # Note: "Has brand name" moved to edges above
+    - "Brand name of"
+    - "Has tradename"
+    - "Tradename of"
+    - "Has supplier"
+    - "Supplier of"
+    - "Available as box"
+    - "Box of"
+
+    # Cross-vocab mapping edges (you said no mappings / no other vocabs)
+    - "Maps to"
+    - "Mapped from"
+    - "Maps to value"
+    - "Value mapped from"
+    - "RxNorm - ATC"
+    - "ATC - RxNorm"
+    - "RxNorm - ATC sec up"
+    - "ATC - RxNorm sec up"
+    - "RxNorm - ATC pr up"
+    - "ATC - RxNorm pr up"
+    - "RxNorm - ATC pr lat"
+    - "ATC - RxNorm pr lat"
+    - "RxNorm - ATC sec lat"
+    - "ATC - RxNorm sec lat"
+    - "RxNorm - SNOMED eq"
+    - "SNOMED - RxNorm eq"
+    - "RxNorm - SPL"
+    - "SPL - RxNorm"
+
+    # Versioning / status / administrative
+    - "Has status"
+    - "Status of"
+    - "Has Module"
+    - "Module of"
+    - "Concept replaces"
+    - "Concept replaced by"
+    - "Concept was_a to"
+    - "Concept was_a from"
+    - "Concept same_as to"
+    - "Concept same_as from"
+    - "Concept poss_eq to"
+    - "Concept poss_eq from"
+    - "Concept alt_to to"
+    - "Concept alt_to from"
+
+  # Notes for downstream modeling (not edges)
+  modeling_hints:
+    numeric_strength_values:
+      store_as_attributes_on_drug_nodes: true
+      do_not_materialize_value_nodes_from_relationships:
+        - "Has numerator value"
+        - "Numerator value of"
+        - "Has denomin value"
+        - "Denom value of"
+        - "Has conc num val"
+        - "Conc num val of"
+        - "Has conc denom val"
+        - "Conc denom val of"
