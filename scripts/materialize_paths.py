@@ -21,6 +21,160 @@ from meds_mcp.server.tools.sparse_graph_ontology import SparseGraphOntology
 from meds_mcp.server.tools.ontologies import LazyAthenaOntology
 
 
+# =============================================================================
+# ICD10CM 7th Character Modifier Extraction
+# =============================================================================
+
+# ICD10CM 7th character definitions
+# Reference: https://www.cms.gov/files/document/2024-icd-10-cm-guidelines.pdf
+# Validated against Athena ICD10CM code descriptions via validate_icd10cm_7th_char.py
+#
+# IMPORTANT: 7th character meanings are context-dependent. These are simplified
+# categories that can be verified from code descriptions. For full semantics,
+# consult the official ICD-10-CM guidelines.
+#
+# Categories:
+# - episode: Initial encounter, subsequent encounter, sequela
+# - healing: Fracture healing complications (delayed, nonunion, malunion)  
+# - fetus: Fetus identification for obstetric codes
+ICD10CM_7TH_CHAR_MODIFIERS = {
+    # Episode of care - Initial encounter
+    "A": {"type": "episode", "label": "initial_encounter", "description": "Initial encounter"},
+    "B": {"type": "episode", "label": "initial_encounter_open_i_ii", "description": "Initial encounter for open fracture type I or II"},
+    "C": {"type": "episode", "label": "initial_encounter_open_iii", "description": "Initial encounter for open fracture type IIIA, IIIB, or IIIC"},
+    
+    # Episode of care - Subsequent encounter (routine healing)
+    "D": {"type": "episode", "label": "subsequent_encounter", "description": "Subsequent encounter"},
+    "E": {"type": "episode", "label": "subsequent_encounter_open_i_ii", "description": "Subsequent encounter for open fracture type I or II with routine healing"},
+    "F": {"type": "episode", "label": "subsequent_encounter_open_iii", "description": "Subsequent encounter for open fracture type IIIA, IIIB, or IIIC with routine healing"},
+    
+    # Episode of care - Sequela
+    "S": {"type": "episode", "label": "sequela", "description": "Sequela"},
+    
+    # Healing status - Delayed healing
+    "G": {"type": "healing", "label": "delayed_healing", "description": "Subsequent encounter for fracture with delayed healing"},
+    "H": {"type": "healing", "label": "delayed_healing_open_i_ii", "description": "Subsequent encounter for open fracture type I or II with delayed healing"},
+    "J": {"type": "healing", "label": "delayed_healing_open_iii", "description": "Subsequent encounter for open fracture type IIIA, IIIB, or IIIC with delayed healing"},
+    
+    # Healing status - Nonunion
+    "K": {"type": "healing", "label": "nonunion", "description": "Subsequent encounter for fracture with nonunion"},
+    "M": {"type": "healing", "label": "nonunion_open_i_ii", "description": "Subsequent encounter for open fracture type I or II with nonunion"},
+    "N": {"type": "healing", "label": "nonunion_open_iii", "description": "Subsequent encounter for open fracture type IIIA, IIIB, or IIIC with nonunion"},
+    
+    # Healing status - Malunion
+    "P": {"type": "healing", "label": "malunion", "description": "Subsequent encounter for fracture with malunion"},
+    "Q": {"type": "healing", "label": "malunion_open_i_ii", "description": "Subsequent encounter for open fracture type I or II with malunion"},
+    "R": {"type": "healing", "label": "malunion_open_iii", "description": "Subsequent encounter for open fracture type IIIA, IIIB, or IIIC with malunion"},
+    
+    # Fetus identification (for maternal codes affecting fetus)
+    "0": {"type": "fetus", "label": "fetus_unspecified", "description": "Fetus unspecified"},
+    "1": {"type": "fetus", "label": "fetus_1", "description": "Fetus 1"},
+    "2": {"type": "fetus", "label": "fetus_2", "description": "Fetus 2"},
+    "3": {"type": "fetus", "label": "fetus_3", "description": "Fetus 3"},
+    "4": {"type": "fetus", "label": "fetus_4", "description": "Fetus 4"},
+    "5": {"type": "fetus", "label": "fetus_5", "description": "Fetus 5"},
+    "9": {"type": "fetus", "label": "fetus_other", "description": "Other fetus"},
+}
+
+
+def extract_icd10cm_7th_char(code: str) -> Optional[Dict]:
+    """
+    Extract 7th character modifier from an ICD10CM code.
+    
+    Args:
+        code: ICD10CM code (e.g., "ICD10CM/S52.531A" or "S52.531A")
+    
+    Returns:
+        Dictionary with:
+        - char: The 7th character itself
+        - type: Category (episode, healing, fracture_type, fetus)
+        - label: Machine-readable label
+        - description: Human-readable description
+        - base_code: The code without the 7th character
+        - token: A vocabulary-prefixed token for the modifier
+        
+        Returns None if no valid 7th character modifier found.
+    """
+    # Strip vocabulary prefix if present
+    if code.startswith("ICD10CM/"):
+        code_only = code[8:]  # Remove "ICD10CM/"
+        vocab_prefix = "ICD10CM/"
+    else:
+        code_only = code
+        vocab_prefix = ""
+    
+    # ICD10CM codes with 7th character:
+    # - Format: XXX.XXXX (7 chars after removing the dot) or XXX.XXX with placeholder X
+    # - The 7th character is always the last character for codes that use it
+    
+    # Remove dot for length calculation
+    code_no_dot = code_only.replace(".", "")
+    
+    # Check if code has 7th character (7 alphanumeric characters)
+    if len(code_no_dot) != 7:
+        return None
+    
+    seventh_char = code_no_dot[-1].upper()
+    
+    # Check if it's a known modifier
+    if seventh_char not in ICD10CM_7TH_CHAR_MODIFIERS:
+        return None
+    
+    modifier_info = ICD10CM_7TH_CHAR_MODIFIERS[seventh_char]
+    
+    # Calculate base code (without 7th character)
+    # Handle codes like S52.531A -> S52.531
+    if "." in code_only:
+        parts = code_only.split(".")
+        base_code = parts[0] + "." + parts[1][:-1]  # Remove last char after dot
+    else:
+        base_code = code_only[:-1]
+    
+    return {
+        "char": seventh_char,
+        "type": modifier_info["type"],
+        "label": modifier_info["label"],
+        "description": modifier_info["description"],
+        "base_code": vocab_prefix + base_code,
+        "full_code": vocab_prefix + code_only,
+        # Token format: ICD10CM/7th/{type}/{label}
+        "token": f"ICD10CM/7th/{modifier_info['type']}/{modifier_info['label']}",
+        # Alternative token with just the character
+        "char_token": f"ICD10CM/7th/{seventh_char}",
+    }
+
+
+def get_icd10cm_modifier_tokens(code: str, ontology=None) -> Dict[str, Set[str]]:
+    """
+    Get ICD10CM modifier tokens for a code, including hierarchy.
+    
+    Args:
+        code: ICD10CM code
+        ontology: Optional ontology for getting base code description
+    
+    Returns:
+        Dictionary with:
+        - "7th_char": Set containing the modifier token
+        - "base_code": Set containing the base code (without 7th char)
+    """
+    result: Dict[str, Set[str]] = {}
+    
+    modifier = extract_icd10cm_7th_char(code)
+    if modifier:
+        # Add the 7th character token
+        result["7th_char_modifier"] = {modifier["token"]}
+        
+        # Add the base code
+        result["base_code"] = {modifier["base_code"]}
+    
+    return result
+
+
+# =============================================================================
+# Core Path Finding Functions
+# =============================================================================
+
+
 def find_root_nodes(ontology, vocabularies: Optional[List[str]] = None) -> Set[str]:
     """Find root nodes (nodes with no parents) in specified vocabularies."""
     # Sample approach: get codes and check if they have parents
@@ -112,6 +266,36 @@ def materialize_icd10cm_paths(ontology, code: str) -> List[List[str]]:
         vocabularies=["ICD10CM"],
         relationship_types=["Is a"],
     )
+
+
+def get_icd10cm_relationship_sets(ontology, code: str) -> Dict[str, Set[str]]:
+    """
+    Get relationship sets for ICD10CM codes, including 7th character modifiers.
+    
+    For codes with 7th character (e.g., S52.531A):
+    - Extracts the modifier type (episode, healing, fracture_type, fetus)
+    - Creates a token for the modifier
+    - Includes the base code without 7th character
+    
+    Returns:
+        Dictionary mapping relationship type to set of codes/tokens
+    """
+    result: Dict[str, Set[str]] = {}
+    
+    # Check for 7th character modifier
+    modifier = extract_icd10cm_7th_char(code)
+    if modifier:
+        # Add the 7th character modifier token
+        result["7th_char_modifier"] = {modifier["token"]}
+        
+        # Add the base code (without 7th character)
+        result["base_code"] = {modifier["base_code"]}
+        
+        # Add description info for the token (for display purposes)
+        # Store as a tuple-like string that can be parsed later
+        result["_modifier_info"] = {f"{modifier['char']}|{modifier['description']}"}
+    
+    return result
 
 
 def materialize_snomed_paths(ontology, code: str) -> List[List[str]]:
@@ -562,7 +746,7 @@ def print_sets_table(code: str, paths: List[List[str]], ontology, relationship_s
         code: Starting code
         paths: List of paths to extract ancestors from
         ontology: Ontology instance
-        relationship_sets: Additional relationship sets (e.g., RxNorm ingredients)
+        relationship_sets: Additional relationship sets (e.g., RxNorm ingredients, ICD10CM modifiers)
         code_width: Width of code column
         desc_width: Width of description column
     """
@@ -576,7 +760,18 @@ def print_sets_table(code: str, paths: List[List[str]], ontology, relationship_s
     if ancestor_set:
         all_sets["ancestors"] = ancestor_set
     if relationship_sets:
-        all_sets.update(relationship_sets)
+        # Filter out internal keys (starting with _)
+        for k, v in relationship_sets.items():
+            if not k.startswith("_"):
+                all_sets[k] = v
+    
+    # Extract modifier info for ICD10CM 7th char tokens (for display)
+    modifier_descriptions = {}
+    if relationship_sets and "_modifier_info" in relationship_sets:
+        for info in relationship_sets["_modifier_info"]:
+            if "|" in info:
+                char, desc = info.split("|", 1)
+                modifier_descriptions[char] = desc
     
     # Print header for starting code
     start_desc = ontology.get_description(code) or ""
@@ -603,10 +798,29 @@ def print_sets_table(code: str, paths: List[List[str]], ontology, relationship_s
         
         # Sort codes for consistent output
         for rel_code in sorted(related_codes):
+            # Try to get description from ontology
             rel_desc = ontology.get_description(rel_code) or ""
             
+            # For 7th character modifier tokens, use the modifier description
+            if rel_code.startswith("ICD10CM/7th/") and not rel_desc:
+                # Extract the modifier info from the token
+                # Token format: ICD10CM/7th/{type}/{label}
+                parts = rel_code.split("/")
+                if len(parts) >= 4:
+                    modifier_type = parts[2]
+                    modifier_label = parts[3]
+                    # Use the detailed description from modifier_descriptions if available
+                    if modifier_descriptions:
+                        # Get the first (and usually only) description
+                        for char, desc in modifier_descriptions.items():
+                            rel_desc = desc
+                            break
+                    else:
+                        # Fallback to label-based description
+                        rel_desc = f"{modifier_type}: {modifier_label.replace('_', ' ')}"
+            
             # Wrap description if needed
-            desc_lines = _wrap_text(rel_desc, desc_width)
+            desc_lines = _wrap_text(rel_desc, desc_width) if rel_desc else [""]
             
             # Print first line with code
             print(f"  {rel_code:<{code_width-2}} {desc_lines[0]}")
@@ -950,6 +1164,8 @@ Examples:
         
         if vocab == "ICD10CM":
             paths = materialize_icd10cm_paths(ontology, code)
+            # Get 7th character modifier tokens if applicable
+            relationship_sets = get_icd10cm_relationship_sets(ontology, code)
         elif vocab == "SNOMED":
             paths = materialize_snomed_paths(ontology, code)
         elif vocab == "LOINC":
