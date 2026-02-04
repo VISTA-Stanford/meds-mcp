@@ -77,3 +77,28 @@ async def get_readmission_prediction(
         "patient_id": person_id,
         "readmission": None,
     }
+
+
+def get_readmission_tool_definition() -> Dict[str, Any]:
+    """OpenAI-format tool definition for readmission prediction lookup."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_readmission_prediction",
+            "description": (
+                "Look up the predicted readmission label for a patient in the cohort from the readmission labels dataset. "
+                "Use this when the user asks whether a patient (or patients) is predicted to have readmission, "
+                "or about readmission risk/prediction for the cohort. Pass the patient_id (one of the cohort patient IDs)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "description": "Patient ID to look up (use one of the patient IDs in the cohort, e.g. from the cohort data).",
+                    }
+                },
+                "required": ["person_id"],
+            },
+        },
+    }
