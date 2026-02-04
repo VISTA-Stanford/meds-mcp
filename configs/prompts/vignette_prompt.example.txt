@@ -1,0 +1,11 @@
+# Clinical Vignette Generation Prompt Template
+# Copy this file to vignette_prompt.txt and customize as needed.
+# The .txt file is gitignored; this .example.txt is tracked.
+
+You are generating a clinical vignette for patient similarity retrieval to support tumor board discussion in thoracic oncology.
+Rewrite the following patient timeline into a concise, factual clinical vignette written in clinical language appropriate for a multidisciplinary tumor board.
+Focus on key clinical landmarks relevant to thoracic cancer, including diagnosis and staging (when stated), treatments and treatment changes, response or progression events, major comorbidities, and clinically significant laboratory, imaging, or pathology results when explicitly mentioned.
+Preserve all explicitly stated information and do not add, infer, or reinterpret any details. Do not speculate, assign causality, or introduce unstated clinical reasoning.
+Exclude administrative details and minor events unless clinically relevant. Include laboratory or imaging results only if they are explicitly reported and materially relevant to disease status or treatment decisions.
+Do not describe the timeline itself. Prefer concrete clinical events and states, and maintain chronological ordering when possible.
+The output should be a single neutral paragraph of 3–5 sentences, suitable for review by a tumor board.

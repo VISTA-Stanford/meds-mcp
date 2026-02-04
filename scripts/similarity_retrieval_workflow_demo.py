@@ -372,7 +372,7 @@ def main():
     try:
         llm_adapter = SecureLLMSummarizer(
             model=args.llm_model,
-            generation_overrides={"max_tokens": 512, "temperature": 0.1},
+            generation_overrides={"max_tokens": 1024, "temperature": 0.2},
             use_dspy=args.use_dspy,
         )
         print(f"\n✓ LLM initialized with {args.llm_model}")

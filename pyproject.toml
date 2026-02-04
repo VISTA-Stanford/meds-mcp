@@ -5,6 +5,9 @@ requires = ["hatchling"]
 [project]
 authors = [
   {name = "Jason Alan Fries", email = "jfries@stanford.edu"},
+  {name = "Vasiliki (Vicky) Bikia", email = "bikia@stanford.edu"},
+  {name = "Ayeeshi Poosarla", email = "ayeeship@stanford.edu"},
+
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
