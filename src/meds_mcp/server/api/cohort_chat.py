@@ -44,6 +44,11 @@ def _tool_call_to_dict(tool_call: Any) -> Dict[str, Any]:
     }
 
 
+def _tool_error(name: str, message: str) -> str:
+    """Return a structured error string for tool failures."""
+    return json.dumps({"error": message, "tool": name})
+
+
 async def execute_cohort_tool_call(
     tool_call_dict: Dict[str, Any],
     patient_ids: List[str],
@@ -52,24 +57,29 @@ async def execute_cohort_tool_call(
     Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
     and delegates others (e.g. calculator) to the sync execute_tool_call.
     """
-    name = (tool_call_dict.get("function") or {}).get("name", "")
-    raw_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
     try:
-        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-    except json.JSONDecodeError:
-        return f"Error: Invalid arguments for {name}"
+        name = (tool_call_dict.get("function") or {}).get("name", "")
+        raw_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            return _tool_error(name, f"Invalid arguments for {name}")
 
-    if name == "get_readmission_prediction":
-        person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
-        if not person_id:
-            return json.dumps({
-                "error": "No person_id provided and cohort has no patient IDs.",
-                "readmission": None,
-            })
-        result = await get_readmission_prediction(person_id)
-        return json.dumps(result)
+        if name == "get_readmission_prediction":
+            person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
+            if not person_id:
+                return json.dumps({
+                    "error": "No person_id provided and cohort has no patient IDs.",
+                    "readmission": None,
+                })
+            result = await get_readmission_prediction(person_id)
+            return json.dumps(result)
 
-    return execute_tool_call(tool_call_dict)
+        return execute_tool_call(tool_call_dict)
+    except Exception as e:
+        logger.exception("Cohort tool execution failed")
+        name = (tool_call_dict.get("function") or {}).get("name", "?")
+        return _tool_error(name, str(e))
 
 
 logger = logging.getLogger(__name__)
@@ -391,7 +401,9 @@ async def cohort_chat(payload: CohortChatRequest):
             for tc in tool_calls_list:
                 tc_dict = _tool_call_to_dict(tc)
                 tool_name = tc_dict.get("function", {}).get("name", "?")
-                logger.info("Cohort chat: executing tool: %s", tool_name)
+                tool_args = tc_dict.get("function", {}).get("arguments", "{}")
+                print(f"Cohort chat: executing tool: {tool_name} (args: {tool_args})")
+                logger.info("Cohort chat: executing tool: %s with args: %s", tool_name, tool_args)
                 result = await execute_cohort_tool_call(tc_dict, used_ids)
                 messages.append({
                     "role": "tool",

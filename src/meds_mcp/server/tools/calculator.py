@@ -77,6 +77,11 @@ def get_calculator_tool_definition() -> Dict[str, Any]:
     }
 
 
+def _tool_error(name: str, message: str) -> str:
+    """Return a structured error string for tool failures."""
+    return json.dumps({"error": message, "tool": name or "?"})
+
+
 def execute_tool_call(tool_call: Dict[str, Any]) -> str:
     """
     Execute a tool call and return the result.
@@ -88,21 +93,30 @@ def execute_tool_call(tool_call: Dict[str, Any]) -> str:
     Returns:
         Result of tool execution as a string
     """
-    function_name = tool_call.get("function", {}).get("name", "")
-    function_args = tool_call.get("function", {}).get("arguments", "{}")
-
     try:
-        args = json.loads(function_args) if isinstance(function_args, str) else function_args
-    except json.JSONDecodeError:
-        logger.error("Failed to parse tool arguments: %s", function_args)
-        return f"Error: Invalid arguments for {function_name}"
+        if not isinstance(tool_call, dict):
+            return _tool_error("?", f"Invalid tool_call: expected dict, got {type(tool_call).__name__}")
+        function_name = (tool_call.get("function") or {}).get("name", "")
+        function_args = (tool_call.get("function") or {}).get("arguments", "{}")
+        print(f"Tool call: {function_name} (args: {function_args})")
+        logger.info("Tool call: %s (args: %s)", function_name, function_args)
 
-    if function_name == "calculator":
-        expression = args.get("expression", "")
-        return calculator_tool(expression)
+        try:
+            args = json.loads(function_args) if isinstance(function_args, str) else function_args
+        except json.JSONDecodeError:
+            logger.error("Failed to parse tool arguments: %s", function_args)
+            return _tool_error(function_name, f"Invalid arguments for {function_name}")
 
-    logger.warning("Unknown tool: %s", function_name)
-    return f"Error: Unknown tool {function_name}"
+        if function_name == "calculator":
+            expression = (args or {}).get("expression", "")
+            return calculator_tool(expression)
+
+        logger.warning("Unknown tool: %s", function_name)
+        return _tool_error(function_name, f"Unknown tool {function_name}")
+    except Exception as e:
+        logger.exception("Tool execution failed")
+        name = (tool_call.get("function") or {}).get("name", "?") if isinstance(tool_call, dict) else "?"
+        return _tool_error(name, str(e))
 
 
 def is_simple_calculation(query: str) -> bool:

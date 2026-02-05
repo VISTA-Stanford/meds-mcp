@@ -516,23 +516,40 @@ def stream_chat_response(
             print(f"🔧 Executing {len(tool_calls)} tool call(s)")
             logger.info(f"🔧 Executing {len(tool_calls)} tool call(s)")
             for tool_call in tool_calls:
-                # Convert tool_call to dict if it's an object
-                if not isinstance(tool_call, dict):
-                    tool_call_dict = {
-                        "id": getattr(tool_call, "id", ""),
-                        "function": {
-                            "name": getattr(tool_call.function, "name", "") if hasattr(tool_call, "function") else "",
-                            "arguments": getattr(tool_call.function, "arguments", "{}") if hasattr(tool_call, "function") else "{}"
+                tool_call_id = ""
+                tool_name = "?"
+                try:
+                    # Convert tool_call to dict if it's an object
+                    if not isinstance(tool_call, dict):
+                        tool_call_dict = {
+                            "id": getattr(tool_call, "id", ""),
+                            "function": {
+                                "name": getattr(tool_call.function, "name", "") if hasattr(tool_call, "function") else "",
+                                "arguments": getattr(tool_call.function, "arguments", "{}") if hasattr(tool_call, "function") else "{}"
+                            }
                         }
-                    }
-                else:
-                    tool_call_dict = tool_call
-                
-                logger.info(f"🔧 Executing tool: {tool_call_dict.get('function', {}).get('name')} with args: {tool_call_dict.get('function', {}).get('arguments')}")
-                tool_result = execute_tool_call(tool_call_dict)
-                tool_call_id = tool_call_dict.get("id", "")
+                    else:
+                        tool_call_dict = tool_call
+
+                    tool_name = (tool_call_dict.get("function") or {}).get("name", "?")
+                    tool_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
+                    print(f"🔧 Executing tool: {tool_name} with args: {tool_args}")
+                    logger.info(f"🔧 Executing tool: {tool_name} with args: {tool_args}")
+                    tool_result = execute_tool_call(tool_call_dict)
+                    tool_call_id = tool_call_dict.get("id", "")
+                except Exception as e:
+                    logger.exception("Tool execution failed")
+                    try:
+                        tool_name = (tool_call_dict.get("function") or {}).get("name", "?")
+                        tool_call_id = tool_call_dict.get("id", "")
+                    except NameError:
+                        pass
+                    tool_result = json.dumps({
+                        "error": str(e),
+                        "tool": tool_name,
+                    })
                 logger.info(f"🔧 Tool result: {tool_result}")
-                
+
                 # Add tool result to messages
                 messages.append({
                     "role": "tool",
