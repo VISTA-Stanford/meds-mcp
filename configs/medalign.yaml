@@ -10,9 +10,9 @@ data:
   # Ontology data directory
   ontology_dir: "data/athena_omop_ontologies"
   # Corpus/collections directory
-  corpus_dir: "data/meds/medalign/medalign_instructions_v1_3/ehrs"
+  corpus_dir: "data/collections/meds/medalign/medalign_instructions_v1_3/ehrs"
   # Cache directory for document store indexes
-  cache_dir: "data/cache/medalign"
+  cache_dir: "data/cache/medalign_indexes"
   # Use lazy loading for ontology (true/false)
   use_lazy_ontology: false
   # Load all patients on initialization (development only)

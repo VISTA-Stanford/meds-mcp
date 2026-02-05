@@ -171,7 +171,8 @@ def initialize_server(config: Dict[str, Any]):
                 data_dir=data_dir,
                 meili=meili,
                 index_name=meili.index.uid,
-                reset_index=meili_cfg.get("reset_on_startup", False),
+                # reset_index=meili_cfg.get("reset_on_startup", False),
+                reset_index=True,
                 max_patients=meili_cfg.get("max_patients", None),
             )
 

@@ -219,5 +219,8 @@ data/
 dumps/
 data.ms/
 
+# Prompts (keep .example.txt tracked, ignore actual prompts)
+configs/prompts/*.txt
+!configs/prompts/*.example.txt
 
 meilisearch
