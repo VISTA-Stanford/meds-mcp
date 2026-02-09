@@ -27,7 +27,7 @@ export REDIVIS_ACCESS_TOKEN="your_redivis_api_key_here"
 export VAULT_SECRET_KEY="your_apim_key_here"
 ```
 
-> **Note:** 
+> **Note:**
 > - `REDIVIS_ACCESS_TOKEN`: Required for downloading MedAlign data (see [Data Setup](#data-setup) for access requirements)
 > - `VAULT_SECRET_KEY`: Required for Stanford APIM LLM access (VPN connection required)
 
@@ -163,6 +163,8 @@ uv run python scripts/test_mcp_client_sdk.py
 ## MCP Chat Demo
 
 LLM performance for evidence citation varies wildly. You should use the latest frontier LLM available to you.
+
+![Cohort chat demo](docs/assets/cohort_chat_demo.png)
 
 ### Available Models
 

@@ -5,6 +5,9 @@ requires = ["hatchling"]
 [project]
 authors = [
   {name = "Jason Alan Fries", email = "jfries@stanford.edu"},
+  {name = "Vasiliki (Vicky) Bikia", email = "bikia@stanford.edu"},
+  {name = "Ayeeshi Poosarla", email = "ayeeship@stanford.edu"},
+
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -48,6 +51,9 @@ dependencies = [
   "uvicorn[standard]>=0.22.0",
   "meilisearch>=0.31.0",
   "fastapi>=0.100.0",
+  "sentence-transformers>=2.4.0",
+  "pytest",
+  "dspy",
 ]
 
 [project.optional-dependencies]
