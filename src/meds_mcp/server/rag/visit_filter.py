@@ -48,7 +48,7 @@ def _event_elem_to_dict(
         "code": event_elem.get("code"),
         "name": event_elem.get("name"),
         "value": event_text,
-        "unit": event_elem.get("unit"),
+        "unit": event_elem.get("unit") or event_elem.get("unit_source_value") or event_elem.get("units"),
         "text": event_text,
         "person_id": person_id,
     }

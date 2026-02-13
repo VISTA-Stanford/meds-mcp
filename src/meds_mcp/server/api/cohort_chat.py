@@ -1,7 +1,6 @@
 # src/meds_mcp/server/api/cohort_chat.py
 
 import json
-import os
 import datetime as dt
 import logging
 import textwrap
@@ -11,6 +10,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from meds_mcp.server.rag.simple_storage import get_all_patient_events
+from meds_mcp.server.rag.context_formatter import (
+    filter_events_before_prediction_time,
+    format_patient_context,
+)
 from meds_mcp.server.llm import (
     get_llm_client,
     extract_response_content,
@@ -23,20 +26,6 @@ from meds_mcp.server.tools.calculator import (
 from meds_mcp.server.tools.readmission import (
     get_readmission_prediction,
     get_readmission_tool_definition,
-)
-from meds_mcp.server.tools.task_tools import (
-    get_task_prediction,
-    get_task_tool_definition,
-    tool_name_to_task,
-)
-from meds_mcp.experiments.task_config import (
-    TASK_DESCRIPTIONS,
-    TASK_QUESTIONS,
-    is_binary_task,
-)
-from meds_mcp.experiments.formatters import (
-    RESPONSE_FORMAT_BINARY,
-    RESPONSE_FORMAT_CATEGORICAL,
 )
 
 def _json_default(obj):
@@ -67,12 +56,10 @@ def _tool_error(name: str, message: str) -> str:
 async def execute_cohort_tool_call(
     tool_call_dict: Dict[str, Any],
     patient_ids: List[str],
-    prediction_time: Optional[str] = None,
-    task_name: Optional[str] = None,
 ) -> str:
     """
-    Execute a tool call for cohort chat. Handles get_readmission_prediction (async),
-    task-specific get_*_prediction tools (vista_bench), and delegates others (e.g. calculator).
+    Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
+    and delegates others (e.g. calculator) to the sync execute_tool_call.
     """
     try:
         name = (tool_call_dict.get("function") or {}).get("name", "")
@@ -81,19 +68,6 @@ async def execute_cohort_tool_call(
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
             return _tool_error(name, f"Invalid arguments for {name}")
-
-        # Task-specific tools (get_{task}_prediction)
-        resolved_task = task_name or tool_name_to_task(name)
-        if resolved_task:
-            person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
-            pred_time = args.get("prediction_time") or prediction_time
-            if not person_id:
-                return json.dumps({
-                    "error": "No person_id provided and cohort has no patient IDs.",
-                    "label": None,
-                })
-            result = await get_task_prediction(person_id, resolved_task, pred_time)
-            return json.dumps(result)
 
         if name == "get_readmission_prediction":
             person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
@@ -125,7 +99,23 @@ class CohortChatRequest(BaseModel):
     )
     max_events_per_patient: int = Field(
         50,
-        description="Maximum number of events to include per patient",
+        description="Maximum number of events to include per patient (ignored when using formatter with prediction_time)",
+    )
+    prediction_time: Optional[str] = Field(
+        None,
+        description="If set, only events with timestamp < prediction_time are used; context is last 4096 tokens before this time.",
+    )
+    task_name: Optional[str] = Field(
+        None,
+        description="Task name (e.g. lab_anemia); when a lab task, events show value/unit and are collapsed by day.",
+    )
+    precomputed_context: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
+        None,
+        description="Optional map patient_id -> list of events; when set, used instead of fetching from store.",
+    )
+    precomputed_context_text: Optional[Dict[str, str]] = Field(
+        None,
+        description="Optional map patient_id -> preformatted context string (delta-encoded, 4096 tokens). When set for a patient, used as-is and event fetch/format is skipped.",
     )
     model: Optional[str] = Field(
         None,
@@ -135,23 +125,9 @@ class CohortChatRequest(BaseModel):
         default=None,
         description="Optional overrides for generation parameters (temperature, top_p, max_tokens, etc.)",
     )
-    use_tools: bool = Field(
-        True,
-        description="If True, enable calculator and readmission tools; if False, LLM answers without tools.",
-    )
-    prediction_time: Optional[str] = Field(
-        None,
-        description="If set, truncate events to only those with timestamp <= prediction_time (ISO format).",
-    )
-    task_name: Optional[str] = Field(
-        None,
-        description="If set, use only this task's tool (vista_bench experiment mode). Overrides default tools.",
-    )
-    precomputed_context: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
-        None,
-        description="If provided, keyed by patient_id; use these events instead of fetching. "
-        "Use when events were precomputed (single-visit extraction). When prediction_time "
-        "is set and this is absent, single-visit XML parsing is used by default.",
+    debug: bool = Field(
+        False,
+        description="If true, print the full context (cohort block + user prompt) to stdout before the LLM/tool call.",
     )
 
 
@@ -170,29 +146,6 @@ class CohortChatResponse(BaseModel):
         default_factory=dict,
         description="Flat index of events keyed by event_key (e.g. '123456:evt_001')",
     )
-
-
-def _truncate_events_to_prediction_time(
-    events: List[Dict[str, Any]],
-    prediction_time_str: Optional[str],
-) -> List[Dict[str, Any]]:
-    """Filter events to only those with timestamp <= prediction_time."""
-    if not prediction_time_str or not str(prediction_time_str).strip():
-        return events
-    try:
-        cutoff = dt.datetime.fromisoformat(
-            str(prediction_time_str).replace("Z", "+00:00").split(".")[0]
-        )
-    except (ValueError, TypeError):
-        return events
-    from meds_mcp.server.tools.search import parse_timestamp_from_metadata
-
-    filtered = []
-    for ev in events:
-        ts = parse_timestamp_from_metadata(ev.get("timestamp"))
-        if ts is None or ts <= cutoff:
-            filtered.append(ev)
-    return filtered
 
 
 def _filter_events(events: List[Dict[str, Any]], query: Optional[str]) -> List[Dict[str, Any]]:
@@ -215,37 +168,28 @@ async def cohort_chat(payload: CohortChatRequest):
     if not payload.patient_ids:
         raise HTTPException(status_code=400, detail="No patient_ids provided")
 
-    # 1) Gather events for each patient
+    # 1) Gather context per patient: either precomputed text or events to format
     cohort_context: List[Dict[str, Any]] = []
     total_events = 0
 
     for pid in payload.patient_ids:
-        try:
-            if payload.precomputed_context is not None and pid in payload.precomputed_context:
-                events = payload.precomputed_context[pid]
-            elif payload.prediction_time:
-                # Single-visit by default when prediction_time is set
-                from meds_mcp.server.rag.simple_storage import get_document_store
-                from meds_mcp.server.rag.visit_filter import get_events_for_single_visit_from_xml
-
-                store = get_document_store()
-                if store is not None:
-                    events = get_events_for_single_visit_from_xml(
-                        person_id=pid,
-                        prediction_time_str=payload.prediction_time,
-                        data_dir=str(store.data_dir),
-                    )
-                else:
-                    events = await get_all_patient_events(pid)
-                    events = _truncate_events_to_prediction_time(events, payload.prediction_time)
-            else:
-                events = await get_all_patient_events(pid)
-                events = _truncate_events_to_prediction_time(events, payload.prediction_time)
-        except Exception:
+        if payload.precomputed_context_text and pid in payload.precomputed_context_text and payload.precomputed_context_text[pid]:
+            cohort_context.append({
+                "patient_id": pid,
+                "context_text": payload.precomputed_context_text[pid],
+            })
             continue
 
+        if payload.precomputed_context and pid in payload.precomputed_context:
+            events = payload.precomputed_context.get(pid) or []
+        else:
+            try:
+                events = await get_all_patient_events(pid)
+            except Exception:
+                continue
+
         events = _filter_events(events, payload.event_query)
-        if payload.max_events_per_patient:
+        if not payload.prediction_time and payload.max_events_per_patient:
             events = events[: payload.max_events_per_patient]
 
         if events:
@@ -263,32 +207,36 @@ async def cohort_chat(payload: CohortChatRequest):
             detail="No events found for the selected patients (after filtering)",
         )
 
-    # 2) Build a compact prompt for the LLM
-    context_snippets = []
-
-    # evidence + event index for frontend
+    # 2) Build context: delta-encoded, filtered by prediction_time, last 4096 tokens per patient
     evidence_data: Dict[str, List[str]] = {}
     event_index: Dict[str, Dict[str, Any]] = {}
+    context_parts: List[str] = []
 
     for entry in cohort_context:
         pid = entry["patient_id"]
-        events = entry["events"]
 
-        simplified_events = []
-        for idx, ev in enumerate(events):
-            # Try to get a stable event id if available
+        if "context_text" in entry:
+            # Precomputed formatted context (e.g. from context cache)
+            if entry["context_text"]:
+                context_parts.append(f"Patient {pid}:\n{entry['context_text']}")
+            continue
+
+        events = entry["events"]
+        # Events that go into the formatter (strictly before prediction_time when set)
+        events_for_context = filter_events_before_prediction_time(
+            events, payload.prediction_time
+        )
+
+        # Build event_index and evidence_data from events that could appear in context
+        for idx, ev in enumerate(events_for_context):
             raw_eid = (
                 ev.get("event_id")
                 or ev.get("id")
                 or ev.get("_id")
                 or ev.get("event_uid")
             )
-
-            # Fallback: synthesize one if missing
             if raw_eid is None:
                 raw_eid = f"ev{idx}"
-
-            # 🔑 event_key is what the LLM will cite and what the UI will look up
             event_key = f"{pid}:{raw_eid}"
 
             ts = ev.get("timestamp") or ev.get("event_time")
@@ -296,7 +244,6 @@ async def cohort_chat(payload: CohortChatRequest):
             text = ev.get("text") or ev.get("content") or ""
             name = ev.get("name")
 
-            # Compact snippet for evidence pane
             snippet_bits = []
             if ts:
                 snippet_bits.append(str(ts))
@@ -306,13 +253,9 @@ async def cohort_chat(payload: CohortChatRequest):
                 snippet_bits.append(str(name))
             if text:
                 snippet_bits.append(text[:200])
-
             snippet = " | ".join(snippet_bits) or "(no details)"
-
-            # Store in evidence_data
             evidence_data.setdefault(event_key, []).append(snippet)
 
-            # Store raw-ish event for modal
             event_index[event_key] = {
                 "patient_id": pid,
                 "event_key": event_key,
@@ -324,155 +267,66 @@ async def cohort_chat(payload: CohortChatRequest):
                 "value": ev.get("value"),
                 "unit": ev.get("unit"),
                 "text": text,
-                # keep full original too if you want
                 "raw": ev,
             }
 
-            simplified_events.append(
-                {
-                    "event_key": event_key,
-                    "timestamp": ts,
-                    "type": ev_type,
-                    "code": ev.get("code"),
-                    "name": name,
-                    "value": ev.get("value"),
-                    "unit": ev.get("unit"),
-                    "text": text,
-                }
-            )
-
-        context_snippets.append(
-            {
-                "patient_id": pid,
-                "events": simplified_events,
-            }
+        # Delta-encoded context, lab value/unit and collapse-by-day when task is lab, last 4096 tokens
+        context_text = format_patient_context(
+            events_for_context,
+            patient_id=pid,
+            prediction_time=payload.prediction_time,
+            task_name=payload.task_name,
+            max_tokens=4096,
+            include_event_key=True,
         )
+        if context_text:
+            context_parts.append(f"Patient {pid}:\n{context_text}")
 
+    cohort_context_block = "\n\n".join(context_parts) if context_parts else "(No events in window.)"
 
-    cohort_json = json.dumps(
-        context_snippets,
-        ensure_ascii=False,
-        indent=2,
-        default=_json_default,
+    system_prompt = (
+        "You are a clinical data analyst reviewing a cohort of patients. "
+        "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines). "
+        "Each event line may end with [[event_key]] for citation. "
+        "Whenever you make a statement supported by a specific event, append [[event_key]].\n\n"
+        "You have access to tools: a calculator (for any arithmetic) and "
+        "get_readmission_prediction (to look up predicted readmission for a patient in the cohort). "
+        "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
     )
 
-    # Minimal timeline format for vista_bench: "timestamp | code | name" per line (reduces tokens)
-    def _to_minimal_timeline(snippets: List[Dict[str, Any]]) -> str:
-        lines = []
-        for entry in snippets:
-            pid = entry.get("patient_id", "")
-            events = entry.get("events", [])
-            if len(snippets) > 1:
-                lines.append(f"Patient {pid}:")
-            for ev in events:
-                ts = ev.get("timestamp") or ev.get("event_time") or ""
-                code = ev.get("code") or ev.get("type") or ev.get("event_type") or ""
-                name = ev.get("name") or ""
-                parts = [str(p) for p in (ts, code, name) if p]
-                if parts:
-                    lines.append(" | ".join(parts))
-        return "\n".join(lines) if lines else "(no events)"
+    user_prompt = textwrap.dedent(
+        f"""
+        Here is a cohort of patients with selected events (most recent 4096 tokens per patient, strictly before prediction_time when set):
 
-    cohort_minimal = _to_minimal_timeline(context_snippets)
+        {cohort_context_block}
 
-    # Task-specific mode (vista_bench experiment)
-    task_name = payload.task_name
-    if task_name:
-        task_desc = TASK_DESCRIPTIONS.get(task_name, task_name)
-        is_binary = is_binary_task(task_name)
-        format_instruction = RESPONSE_FORMAT_BINARY if is_binary else RESPONSE_FORMAT_CATEGORICAL
+        QUESTION ABOUT THIS COHORT:
+        {payload.question}
 
-        system_prompt_base = (
-            "You are a clinical data analyst. Answer the user's question based on the patient timeline data provided.\n\n"
-            f"Response format: {format_instruction}\n\n"
-        )
-        if payload.use_tools:
-            system_prompt = (
-                system_prompt_base
-                + f"You have access to a tool that can look up {task_desc} for this patient. "
-                "Use it to supplement the timeline data, then output only your final one-word answer with no reasoning.\n\n"
-                f"Response format: {format_instruction}\n\n"
-            )
-        else:
-            system_prompt = system_prompt_base
+        Please provide:
+        - A concise summary of key patterns across these patients.
+        - Any notable differences between them (if visible).
+        - Brief mention of limitations (e.g., missing labs, limited time span) if relevant.
+        """
+    )
 
-        user_suffix = (
-            "You may use the available tool to look up {task} information for this patient. "
-            "When calling the tool, use person_id from the cohort data and prediction_time: {pred_time}. "
-            "After receiving the tool result, output only your one-word answer. "
-            "Do not include any reasoning, explanation, or justification—only the answer.\n\n"
-            "Answer with {format_instruction}."
-        )
-        pred_time_str = payload.prediction_time or "N/A"
-        user_suffix = user_suffix.format(
-            task=task_desc, pred_time=pred_time_str, format_instruction=format_instruction
-        )
-        if not payload.use_tools:
-            user_suffix = f"Answer with {format_instruction}. Do not include reasoning—only the one-word answer."
-
-        user_prompt = textwrap.dedent(
-            f"""
-            Here is the patient's timeline (events up to the prediction time), one event per line: timestamp | code | name
-
-            TIMELINE:
-            {cohort_minimal}
-
-            QUESTION: {payload.question}
-
-            {user_suffix}
-            """
-        )
-    else:
-        # Default cohort chat mode
-        system_prompt_base = (
-            "You are a clinical data analyst with access to a cohort of patients and their events. "
-            "Answer the user's question directly. When the question is about the cohort data, "
-            "use trends, similarities, and differences across patients; do not hallucinate diagnoses or outcomes not supported by the data.\n\n"
-            "Each event in the JSON includes an 'event_key' field like '123456:ev42'. "
-            "When you cite a specific event, append a citation in the form [[event_key]]. For example: "
-            "\"Patient 123456 had a high creatinine [[123456:ev42]]\".\n\n"
-        )
-        if payload.use_tools:
-            system_prompt = (
-                system_prompt_base
-                + "You have access to tools: a calculator (for any arithmetic or numerical computation) and "
-                "get_readmission_prediction (to look up predicted readmission for a patient in the cohort). "
-                "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
-            )
-        else:
-            system_prompt = system_prompt_base
-
-        user_prompt = textwrap.dedent(
-            f"""
-            Here is a cohort of patients with selected events:
-
-            COHORT DATA (JSON):
-            {cohort_json}
-
-            QUESTION:
-            {payload.question}
-
-            Answer the question directly. Use the cohort data only when the question is about these patients. For simple factual or arithmetic questions, answer briefly without adding unrelated cohort analysis.
-            """
-        )
+    if payload.debug:
+        print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
+        print("--- COHORT CONTEXT BLOCK ---")
+        print(cohort_context_block)
+        print("--- FULL USER PROMPT ---")
+        print(user_prompt)
+        print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
 
     # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
     gen_cfg = get_default_generation_config(payload.generation_config)
-    # Lower temperature for vista_bench experiments: faster, more deterministic answers
-    if task_name:
-        gen_cfg = {**gen_cfg, "temperature": 0.0}
-        if payload.generation_config:
-            gen_cfg.update(payload.generation_config)
 
-    if task_name:
-        tools = [get_task_tool_definition(task_name, payload.prediction_time)]
-    else:
-        tools = [
-            get_readmission_tool_definition(),
-            get_calculator_tool_definition(),
-        ]
+    tools = [
+        get_readmission_tool_definition(),
+        get_calculator_tool_definition(),
+    ]
     used_ids = [entry["patient_id"] for entry in cohort_context]
 
     messages: List[Dict[str, Any]] = [
@@ -480,64 +334,38 @@ async def cohort_chat(payload: CohortChatRequest):
         {"role": "user", "content": user_prompt},
     ]
 
-    # DEBUG: Print full context before API call (set DEBUG_COHORT_CONTEXT=1 to enable)
-    if os.environ.get("DEBUG_COHORT_CONTEXT", "").strip() in ("1", "true", "yes"):
-        print("\n" + "=" * 80)
-        print(
-            f"FULL CONTEXT SENT TO LLM (task_name={task_name}, use_tools={payload.use_tools}, "
-            f"patients={used_ids})"
-        )
-        print("=" * 80)
-        print("\n--- SYSTEM PROMPT ---\n")
-        print(system_prompt)
-        print("\n--- USER PROMPT ---\n")
-        print(user_prompt)
-        if payload.use_tools and tools:
-            print("\n--- TOOLS ---\n")
-            for t in tools:
-                print(json.dumps(t, indent=2, default=_json_default))
-        print("=" * 80 + "\n")
-
     max_tool_iterations = 5
     response = None
-    use_tools = payload.use_tools
+    use_tools = True
 
     try:
-        if not use_tools:
+        try:
             response = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
+                tools=tools,
+                tool_choice="auto",
                 **gen_cfg,
             )
-            logger.info("Cohort chat: request sent without tools (use_tools=False)")
-        else:
-            try:
+            logger.info(
+                "Cohort chat: request sent with tools=%s",
+                [t.get("function", {}).get("name") for t in tools],
+            )
+        except (TypeError, ValueError, Exception) as tools_err:
+            err_msg = str(tools_err)
+            if "tool" in err_msg.lower() or "parse" in err_msg.lower() or "NoneType" in err_msg:
+                logger.warning(
+                    "Cohort chat: API failed with tools, falling back to no tools: %s",
+                    err_msg[:200],
+                )
+                use_tools = False
                 response = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
                     **gen_cfg,
                 )
-                logger.info(
-                    "Cohort chat: request sent with tools=%s",
-                    [t.get("function", {}).get("name") for t in tools],
-                )
-            except (TypeError, ValueError, Exception) as tools_err:
-                err_msg = str(tools_err)
-                if "tool" in err_msg.lower() or "parse" in err_msg.lower() or "NoneType" in err_msg:
-                    logger.warning(
-                        "Cohort chat: API failed with tools, falling back to no tools: %s",
-                        err_msg[:200],
-                    )
-                    use_tools = False
-                    response = client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        **gen_cfg,
-                    )
-                else:
-                    raise
+            else:
+                raise
 
         iteration = 0
         while use_tools and iteration < max_tool_iterations:
@@ -591,16 +419,9 @@ async def cohort_chat(payload: CohortChatRequest):
                 tc_dict = _tool_call_to_dict(tc)
                 tool_name = tc_dict.get("function", {}).get("name", "?")
                 tool_args = tc_dict.get("function", {}).get("arguments", "{}")
-                if not payload.task_name:
-                    print(f"Cohort chat: executing tool: {tool_name} (args: {tool_args})")
-                    logger.info("Cohort chat: executing tool: %s with args: %s", tool_name, tool_args)
-                else:
-                    logger.debug("Cohort chat: executing tool: %s", tool_name)
-                result = await execute_cohort_tool_call(
-                    tc_dict, used_ids,
-                    prediction_time=payload.prediction_time,
-                    task_name=payload.task_name,
-                )
+                print(f"Cohort chat: executing tool: {tool_name} (args: {tool_args})")
+                logger.info("Cohort chat: executing tool: %s with args: %s", tool_name, tool_args)
+                result = await execute_cohort_tool_call(tc_dict, used_ids)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_dict.get("id", ""),

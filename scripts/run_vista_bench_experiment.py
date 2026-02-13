@@ -130,6 +130,18 @@ def _load_precomputed_events(cache_path: Path) -> dict:
         return {}
 
 
+def _load_context_cache(cache_path: Path) -> dict:
+    """Load precomputed formatted context cache. Keys: 'patient_id|prediction_time|task_name', Values: context string."""
+    if not cache_path.exists():
+        return {}
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        logging.warning(f"Could not load context cache from {cache_path}: {e}")
+        return {}
+
+
 def _load_cache(cache_path: Path) -> dict:
     """Load response cache from JSON file. Keys are tuples stored as JSON arrays."""
     if not cache_path.exists():
@@ -167,10 +179,13 @@ async def run_single_prediction(
     max_retries: int = 5,
     cache: Optional[dict] = None,
     precomputed_events: Optional[dict] = None,
+    precomputed_context_cache: Optional[dict] = None,
+    debug: bool = False,
 ) -> str:
     """Run cohort_chat for one (patient, task) with LLM only or LLM+tool.
     Retries on 429/token limit with backoff. Uses cache when provided.
-    Single-visit filtering is the default; precomputed_events avoids per-call XML parsing.
+    When precomputed_context_cache is set and has the key, uses precomputed_context_text (formatted string).
+    Otherwise uses precomputed_events (event lists) if set.
     """
     from meds_mcp.server.api.cohort_chat import cohort_chat
     from meds_mcp.server.api.cohort_chat import CohortChatRequest
@@ -180,7 +195,11 @@ async def run_single_prediction(
         return cache[key]
 
     pc = None
-    if precomputed_events is not None:
+    pc_text = None
+    context_cache_key = f"{patient_id}|{prediction_time}|{task_name}"
+    if precomputed_context_cache is not None and context_cache_key in precomputed_context_cache:
+        pc_text = {patient_id: precomputed_context_cache[context_cache_key]}
+    elif precomputed_events is not None:
         row_key = (patient_id, prediction_time)
         if row_key in precomputed_events:
             pc = {patient_id: precomputed_events[row_key]}
@@ -193,6 +212,8 @@ async def run_single_prediction(
         use_tools=use_tools,
         max_events_per_patient=500,
         precomputed_context=pc,
+        precomputed_context_text=pc_text,
+        debug=debug,
     )
     last_exc = None
     for attempt in range(max_retries + 1):
@@ -239,6 +260,8 @@ async def _process_single_row(
     max_retries: int,
     cache: Optional[dict] = None,
     precomputed_events: Optional[dict] = None,
+    precomputed_context_cache: Optional[dict] = None,
+    debug: bool = False,
 ) -> Tuple[Tuple[str, str, str], dict]:
     """Process one row: LLM-only + LLM+tool (in parallel). Returns (row_key, record)."""
     from meds_mcp.experiments.formatters import ground_truth_to_normalized
@@ -254,10 +277,12 @@ async def _process_single_row(
             run_single_prediction(
                 patient_id, prediction_time, task_name, question, use_tools=False,
                 max_retries=max_retries, cache=cache, precomputed_events=precomputed_events,
+                precomputed_context_cache=precomputed_context_cache, debug=debug,
             ),
             run_single_prediction(
                 patient_id, prediction_time, task_name, question, use_tools=True,
                 max_retries=max_retries, cache=cache, precomputed_events=precomputed_events,
+                precomputed_context_cache=precomputed_context_cache, debug=debug,
             ),
         )
         await asyncio.sleep(delay_seconds)
@@ -281,7 +306,8 @@ async def _process_single_row(
 
 
 async def run_experiment_async(
-    args, config, num_patients_loaded: int = 0, precomputed_events: Optional[dict] = None
+    args, config, num_patients_loaded: int = 0, precomputed_events: Optional[dict] = None,
+    precomputed_context_cache: Optional[dict] = None,
 ):  # noqa: C901
     """Async experiment runner with progress bar and parallel batching."""
     from meds_mcp.experiments.task_config import (
@@ -308,8 +334,8 @@ async def run_experiment_async(
         output_dir / f"vista_bench_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     )
 
-    # Precomputed single-visit events: use passed-in or load from path
-    if precomputed_events is None:
+    # Precomputed single-visit events: use passed-in or load from path (only when not using context cache)
+    if precomputed_events is None and not precomputed_context_cache:
         precomputed_path = (
             Path(args.precomputed_events_path)
             if getattr(args, "precomputed_events_path", None)
@@ -379,14 +405,19 @@ async def run_experiment_async(
                 row_key = (patient_id, task_name, prediction_time)
                 if row_key in completed:
                     continue
-                # When using precomputed cache, skip rows not in cache (no document store to fall back to)
-                if precomputed_events and (patient_id, prediction_time) not in precomputed_events:
+                # When using context cache, skip rows not in cache
+                if precomputed_context_cache:
+                    if f"{patient_id}|{prediction_time}|{task_name}" not in precomputed_context_cache:
+                        skipped_not_in_cache += 1
+                        continue
+                # When using events cache (and not context cache), skip rows not in cache
+                elif precomputed_events and (patient_id, prediction_time) not in precomputed_events:
                     skipped_not_in_cache += 1
                     continue
                 to_process.append(row)
 
             if skipped_not_in_cache:
-                logging.info(f"Task {task_name}: skipped {skipped_not_in_cache} rows (not in precomputed cache)")
+                logging.info(f"Task {task_name}: skipped {skipped_not_in_cache} rows (not in cache)")
             if not to_process:
                 logging.info(f"Task {task_name}: no rows to process (all done or skipped)")
                 continue
@@ -399,6 +430,8 @@ async def run_experiment_async(
                     row, task_name, question, is_binary,
                     sem, args.delay_seconds, args.max_retries, cache=cache,
                     precomputed_events=precomputed_events,
+                    precomputed_context_cache=precomputed_context_cache,
+                    debug=getattr(args, "debug", False),
                 )
                 if pbar:
                     pbar.update(1)
@@ -546,6 +579,22 @@ def main():
         default=None,
         help="Path to precomputed single-visit events JSON. Default: output-dir/single_visit_events_cache.json",
     )
+    parser.add_argument(
+        "--context-cache-path",
+        type=str,
+        default=None,
+        help="Path to precomputed formatted context JSON (from precompute_context_cache.py). When set, uses new format cache and skips document store init. Default: output-dir/context_cache.json",
+    )
+    parser.add_argument(
+        "--precompute-context",
+        action="store_true",
+        help="Run precompute_context_cache.py before experiment (builds context_cache.json from events cache or XML)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print full context (cohort block + user prompt) to stdout before each LLM/tool call.",
+    )
     args = parser.parse_args()
 
     if args.resume and not args.output:
@@ -569,6 +618,25 @@ def main():
         logging.info("Running precomputation of single-visit events...")
         subprocess.run(precompute_cmd, check=True)
 
+    if getattr(args, "precompute_context", False):
+        import subprocess
+        events_cache = Path(args.output_dir) / "single_visit_events_cache.json"
+        ctx_cmd = [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "precompute_context_cache.py"),
+            "--output-dir", args.output_dir,
+        ]
+        if events_cache.exists():
+            ctx_cmd.extend(["--events-cache", str(events_cache)])
+        else:
+            ctx_cmd.extend(["--config", args.config])
+        if args.task:
+            ctx_cmd.extend(["--task", args.task])
+        if args.limit:
+            ctx_cmd.extend(["--limit", str(args.limit)])
+        logging.info("Running precomputation of formatted context cache...")
+        subprocess.run(ctx_cmd, check=True)
+
     # Collect patient_ids from task CSVs so we only load that subset
     from meds_mcp.experiments.task_config import (
         ALL_TASKS,
@@ -583,21 +651,37 @@ def main():
     patient_ids = get_patient_ids_from_task_csvs(tasks_to_run, args.limit)
     logging.info(f"Found {len(patient_ids)} unique patients across task CSVs (will load subset only)")
 
-    # Skip document store init when precomputed cache exists (avoids 865-patient XML parse + BM25 build)
-    precomputed_path = (
-        Path(args.precomputed_events_path)
-        if getattr(args, "precomputed_events_path", None)
-        else Path(args.output_dir) / "single_visit_events_cache.json"
+    # Context cache (new format: formatted context string per pid|pt|task) takes precedence
+    context_cache_path = (
+        Path(args.context_cache_path)
+        if getattr(args, "context_cache_path", None)
+        else Path(args.output_dir) / "context_cache.json"
     )
-    precomputed_events = _load_precomputed_events(precomputed_path)
-    if precomputed_events:
+    precomputed_context_cache = _load_context_cache(context_cache_path)
+    if precomputed_context_cache:
         logging.info(
-            f"Using precomputed cache ({len(precomputed_events)} entries); skipping document store init. "
+            f"Using context cache ({len(precomputed_context_cache)} entries); skipping document store init. "
             "Rows not in cache will be skipped."
         )
+
+    # Events cache (for backward compat when not using context cache)
+    if not precomputed_context_cache:
+        precomputed_path = (
+            Path(args.precomputed_events_path)
+            if getattr(args, "precomputed_events_path", None)
+            else Path(args.output_dir) / "single_visit_events_cache.json"
+        )
+        precomputed_events = _load_precomputed_events(precomputed_path)
+        if precomputed_events:
+            logging.info(
+                f"Using precomputed events cache ({len(precomputed_events)} entries); skipping document store init. "
+                "Rows not in cache will be skipped."
+            )
+        else:
+            logging.info("No precomputed cache found; initializing document store (this may take a while)")
+            initialize_for_experiment(config, patient_ids=patient_ids)
     else:
-        logging.info("No precomputed cache found; initializing document store (this may take a while)")
-        initialize_for_experiment(config, patient_ids=patient_ids)
+        precomputed_events = {}
 
     # Silence per-request logs during experiment (progress bar only)
     logging.getLogger("meds_mcp.server.api.cohort_chat").setLevel(logging.WARNING)
@@ -605,7 +689,12 @@ def main():
         logging.getLogger(_logger).setLevel(logging.ERROR)
 
     total, output_path, summary_path = asyncio.run(
-        run_experiment_async(args, config, num_patients_loaded=len(patient_ids), precomputed_events=precomputed_events)
+        run_experiment_async(
+            args, config,
+            num_patients_loaded=len(patient_ids),
+            precomputed_events=precomputed_events,
+            precomputed_context_cache=precomputed_context_cache,
+        )
     )
     logging.info(f"Done. Wrote {total} records to {output_path}, summary to {summary_path}")
 

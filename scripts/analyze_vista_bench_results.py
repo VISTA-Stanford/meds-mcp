@@ -21,8 +21,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from meds_mcp.experiments.task_config import BINARY_TASKS
 
-# Tasks to exclude from all graphs
-EXCLUDED_TASKS = {"lab_hyperlipidemia", "lab_hypertension"}
+# Tasks to exclude from all graphs (new_hyperlipidemia and new_hypertension are binary and included)
+EXCLUDED_TASKS: set = set()
 
 
 def load_results(jsonl_path: Path) -> pl.DataFrame:

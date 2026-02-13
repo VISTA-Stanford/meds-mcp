@@ -81,10 +81,10 @@ uv run python scripts/run_vista_bench_experiment.py \
 ## Tasks
 
 **Binary tasks** (response: yes/no):  
-`new_celiac`, `guo_icu`, `guo_los`, `new_lupus`, `new_mi`, `new_pancan`, `guo_readmission`
+`new_celiac`, `guo_icu`, `guo_los`, `new_lupus`, `new_acutemi`, `new_pancan`, `guo_readmission`, `new_hyperlipidemia`, `new_hypertension`
 
 **Categorical tasks** (response: severe/moderate/mild/normal):  
-`lab_anemia`, `lab_hyperkalemia`, `lab_hyperlipidemia`, `lab_hypertension`, `lab_hypoglycemia`, `lab_hypoatremia`, `lab_thrombocytopenia`
+`lab_anemia`, `lab_hyperkalemia`, `lab_hypoglycemia`, `lab_hypoatremia`, `lab_thrombocytopenia`
 
 ## Output Files
 
