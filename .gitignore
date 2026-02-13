@@ -218,7 +218,6 @@ data/
 **/cache
 dumps/
 data.ms/
-results/
 
 # Prompts (keep .example.txt tracked, ignore actual prompts)
 configs/prompts/*.txt

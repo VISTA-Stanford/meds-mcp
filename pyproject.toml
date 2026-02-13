@@ -31,13 +31,9 @@ version = "0.1.0"
 
 dependencies = [
   "mcp>=1.0.0",
-  "httpx-sse>=0.4.0,<0.5",
   "matplotlib>=3.7.0",
   "numpy>=1.24.0",
-  "pandas>=2.0.0",
   "polars>=0.20.0",
-  "scikit-learn>=1.3.0",
-  "seaborn>=0.12.0",
   "pyarrow>=12.0.0",
   "networkx>=3.0",
   "python-dotenv>=1.0.0",
@@ -58,7 +54,6 @@ dependencies = [
   "sentence-transformers>=2.4.0",
   "pytest",
   "dspy",
-  "tqdm>=4.65.0",
 ]
 
 [project.optional-dependencies]
@@ -156,7 +151,6 @@ markers = [
   "integration: marks tests as integration tests",
   "unit: marks tests as unit tests",
   "asyncio: marks tests as async (pytest-asyncio)",
-  "tool_calls: marks tests that exercise LLM tool calling (calculator, readmission, execute_cohort_tool_call flow)",
 ]
 minversion = "7.0"
 python_classes = ["Test*"]

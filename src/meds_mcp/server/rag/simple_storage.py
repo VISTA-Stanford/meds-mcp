@@ -93,13 +93,11 @@ class XMLDocumentStore:
         cache_dir: str = "cache",
         load_all_patients: bool = False,
         patient_id: Optional[str] = None,
-        patient_ids: Optional[List[str]] = None,
     ):
         self.data_dir = Path(data_dir)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.patient_id = patient_id
-        self.patient_ids = patient_ids  # Subset of patients to load (overrides load_all if set)
 
         # Storage components
         self.docstore = SimpleDocumentStore()
@@ -354,20 +352,10 @@ class XMLDocumentStore:
         return patient.get_events()
 
     def load_all_patients(self):
-        """Scan data_dir for XML files and load each patient (or only patient_id/patient_ids if set)."""
+        """Scan data_dir for XML files and load each patient (or only patient_id if set)."""
         if self.patient_id:
             xml_file = self.data_dir / f"{self.patient_id}.xml"
             xml_files = [xml_file] if xml_file.exists() else []
-        elif self.patient_ids is not None:
-            xml_files = []
-            seen = set()
-            for pid in self.patient_ids:
-                if pid in seen:
-                    continue
-                seen.add(pid)
-                xml_file = self.data_dir / f"{pid}.xml"
-                if xml_file.exists():
-                    xml_files.append(xml_file)
         else:
             xml_files = list(self.data_dir.glob("*.xml"))
         total_files = len(xml_files)
@@ -389,13 +377,12 @@ def initialize_document_store(
     cache_dir: str = "cache",
     load_all_patients: bool = False,
     patient_id: Optional[str] = None,
-    patient_ids: Optional[List[str]] = None,
 ) -> XMLDocumentStore:
     """Initialize the global document store."""
     global _document_store
 
     _document_store = XMLDocumentStore(
-        data_dir, cache_dir, load_all_patients, patient_id=patient_id, patient_ids=patient_ids
+        data_dir, cache_dir, load_all_patients, patient_id=patient_id
     )
     return _document_store
 
