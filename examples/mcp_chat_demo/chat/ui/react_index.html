@@ -656,6 +656,7 @@
       const [chatLoading, setChatLoading] = useState(false);
       const [chatError, setChatError] = useState("");
       const [eventQuery, setEventQuery] = useState("");
+      const [useTools, setUseTools] = useState(true);
       const [debugInfo, setDebugInfo] = useState(null);
       const messagesEndRef = useRef(null);
 
@@ -817,7 +818,8 @@
             // Only send last 3 messages for context to keep payload small
             history: messages.slice(-3),
             // Include model selection
-            model: selectedModel
+            model: selectedModel,
+            use_tools: useTools
           };
 
           console.log(`Sending chat request: ${maxPatients} patients, ${eventsPerPatient} events per patient`);
@@ -1167,6 +1169,20 @@
                     </span>
                   ))
                 )}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={useTools}
+                  onChange={(e) => setUseTools(e.target.checked)}
+                />
+                <span>Use tools (calculator, readmission prediction)</span>
+              </label>
+              <div className="small" style={{ marginBottom: 8 }}>
+                When enabled, the model can run calculations and look up readmission risk. When disabled, the model answers from context only.
               </div>
             </div>
 

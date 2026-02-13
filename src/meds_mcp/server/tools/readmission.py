@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 # Default CSV path relative to repo root (5 levels up from this file)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
-_DEFAULT_CSV_PATH = _REPO_ROOT / "data" / "ehrshot" / "test" / "readmission_labels.csv"
+_DEFAULT_CSV_PATH = _REPO_ROOT / "data" / "readmission_labels.csv"
 
 
 def _get_csv_path(csv_path: Optional[str] = None) -> Path:
@@ -59,7 +59,8 @@ async def get_readmission_prediction(
                 }
             for row in reader:
                 if row.get("patient_id") == person_id:
-                    label = row.get("readmission", "").strip()
+                    # Support both "readmission" and "label" column names
+                    label = (row.get("readmission") or row.get("label") or "").strip()
                     return {
                         "patient_id": person_id,
                         "readmission": label or None,

@@ -7,6 +7,12 @@ Run with:
 Run only unit-tagged tests:
     pytest tests/test_tool_calling.py -m unit
 
+Run only tests that exercise tool calling (calculator/readmission flow):
+    pytest tests/test_tool_calling.py -m tool_calls
+
+Run without tool-call tests:
+    pytest tests/test_tool_calling.py -m "not tool_calls"
+
 Run with verbose output:
     pytest tests/test_tool_calling.py -v
 """
@@ -451,6 +457,7 @@ class TestGetReadmissionPrediction:
 
 
 @pytest.mark.unit
+@pytest.mark.tool_calls
 class TestLlmToolCallFlowCalculator:
     """Verify that when the LLM returns a calculator tool call, we execute it and get the right result."""
 
@@ -507,6 +514,7 @@ class TestLlmToolCallFlowCalculator:
 
 
 @pytest.mark.unit
+@pytest.mark.tool_calls
 class TestLlmToolCallFlowReadmission:
     """Verify that when the LLM returns a readmission tool call, we execute it and get the right result."""
 

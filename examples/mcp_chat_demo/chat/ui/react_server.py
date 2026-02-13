@@ -126,6 +126,7 @@ class CohortChatRequest(BaseModel):
     max_events_per_patient: int = 50
     model: Optional[str] = None
     generation_config: Optional[Dict[str, Any]] = None
+    use_tools: Optional[bool] = True
 
 
 class CohortChatProxyResponse(BaseModel):
@@ -287,6 +288,7 @@ async def cohort_chat_proxy(request: CohortChatRequest):
         "max_events_per_patient": request.max_events_per_patient,
         "model": model_name,
         "generation_config": request.generation_config,
+        "use_tools": request.use_tools if request.use_tools is not None else True,
     }
 
     try:
