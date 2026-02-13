@@ -201,7 +201,10 @@ async def run_single_prediction(
 
     key = _cache_key(patient_id, prediction_time, task_name, use_tools, model=model)
     if cache is not None and key in cache:
-        return cache[key]
+        cached = cache[key]
+        if isinstance(cached, dict):
+            return cached
+        return {"answer": cached, "tool_executions": 0}
 
     pc = None
     pc_text = None
@@ -229,10 +232,13 @@ async def run_single_prediction(
     for attempt in range(max_retries + 1):
         try:
             result = await cohort_chat(payload)
-            answer = result.answer
+            out = {
+                "answer": result.answer,
+                "tool_executions": getattr(result, "tool_executions", 0),
+            }
             if cache is not None:
-                cache[key] = answer
-            return answer
+                cache[key] = out
+            return out
         except HTTPException as e:
             last_exc = e
             # 429 may be wrapped as 500 by cohort_chat; check detail for retryable
@@ -244,8 +250,10 @@ async def run_single_prediction(
                 )
                 await asyncio.sleep(wait_s)
                 continue
-            logging.error(f"HTTP {e.status_code} for {patient_id} {task_name} use_tools={use_tools}: {e.detail}")
-            return f"[ERROR: {str(e.detail)}]"
+            logging.error(
+                f"HTTP {e.status_code} for {patient_id} {task_name} use_tools={use_tools}: {e.detail}"
+            )
+            return {"answer": f"[ERROR: {str(e.detail)}]", "tool_executions": 0}
         except Exception as e:
             last_exc = e
             if _is_retryable_error(e) and attempt < max_retries:
@@ -256,8 +264,8 @@ async def run_single_prediction(
                 await asyncio.sleep(wait_s)
                 continue
             logging.error(f"Error for {patient_id} {task_name} use_tools={use_tools}: {e}")
-            return f"[ERROR: {str(e)}]"
-    return f"[ERROR: {str(last_exc)}]"
+            return {"answer": f"[ERROR: {str(e)}]", "tool_executions": 0}
+    return {"answer": f"[ERROR: {str(last_exc)}]", "tool_executions": 0}
 
 
 async def _process_single_row(
@@ -284,7 +292,7 @@ async def _process_single_row(
     row_key = (patient_id, task_name, prediction_time)
 
     async with sem:
-        answer_llm, answer_tool = await asyncio.gather(
+        result_llm, result_tool = await asyncio.gather(
             run_single_prediction(
                 patient_id, prediction_time, task_name, question, use_tools=False,
                 max_retries=max_retries, cache=cache, precomputed_events=precomputed_events,
@@ -297,6 +305,10 @@ async def _process_single_row(
             ),
         )
         await asyncio.sleep(delay_seconds)
+
+    answer_llm = result_llm["answer"]
+    answer_tool = result_tool["answer"]
+    tool_executions = result_tool.get("tool_executions", 0)
 
     from meds_mcp.experiments.formatters import normalize_binary, normalize_categorical
     norm_llm = normalize_binary(answer_llm) if is_binary else normalize_categorical(answer_llm)
@@ -312,6 +324,7 @@ async def _process_single_row(
         "llm_only_normalized": norm_llm,
         "llm_plus_tool_raw": answer_tool,
         "llm_plus_tool_normalized": norm_tool,
+        "tool_executions": tool_executions,
     }
     return (row_key, record)
 
@@ -437,6 +450,8 @@ async def run_experiment_async(
                 continue
 
             task_start = time.perf_counter()
+            task_tool_exposed = len(to_process)
+            task_tool_executed = 0
             logging.info(f"Task {task_name}: {len(to_process)} rows (batch_size={args.batch_size})")
 
             async def process_with_progress(row, pbar):
@@ -473,6 +488,7 @@ async def run_experiment_async(
                 write_buffer.append(record)
                 total += 1
                 task_success += 1
+                task_tool_executed += record.get("tool_executions", 0)
                 completed.add(row_key)
                 if len(write_buffer) >= args.write_batch_size:
                     for rec in write_buffer:
@@ -488,6 +504,8 @@ async def run_experiment_async(
             task_summaries[task_name] = {
                 "num_patients": task_success,
                 "elapsed_seconds": round(task_elapsed, 2),
+                "tool_exposed_count": task_tool_exposed,
+                "tool_executed_count": task_tool_executed,
             }
             logging.info(f"  {task_name}: {len(to_process)} patients in {task_elapsed:.1f}s")
 

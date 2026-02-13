@@ -199,6 +199,10 @@ class CohortChatResponse(BaseModel):
         default_factory=dict,
         description="Flat index of events keyed by event_key (e.g. '123456:evt_001')",
     )
+    tool_executions: int = Field(
+        default=0,
+        description="Number of times the task prediction tool was executed in this request (for Vista bench summary).",
+    )
 
 
 def _filter_events(events: List[Dict[str, Any]], query: Optional[str]) -> List[Dict[str, Any]]:
@@ -426,6 +430,7 @@ async def cohort_chat(payload: CohortChatRequest):
     max_tool_iterations = 5
     response = None
     use_tools = payload.use_tools and len(tools) > 0
+    tool_executions = 0
 
     try:
         if use_tools:
@@ -522,6 +527,10 @@ async def cohort_chat(payload: CohortChatRequest):
                         f"[DEBUG tool calling] task={payload.task_name or '(none)'} | "
                         f"executing tool={tool_name} | args={tool_args}"
                     )
+                # Count task prediction tool executions for this request (Vista bench summary)
+                resolved_task = tool_name_to_task(tool_name)
+                if resolved_task is not None and payload.task_name and resolved_task == payload.task_name:
+                    tool_executions += 1
                 result = await execute_cohort_tool_call(
                     tc_dict,
                     used_ids,
@@ -566,4 +575,5 @@ async def cohort_chat(payload: CohortChatRequest):
         debug_context_size=len(cohort_context),
         evidence_data=evidence_data,
         event_index=event_index,
+        tool_executions=tool_executions,
     )
