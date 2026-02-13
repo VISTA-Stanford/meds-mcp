@@ -27,6 +27,28 @@ from meds_mcp.server.tools.readmission import (
     get_readmission_prediction,
     get_readmission_tool_definition,
 )
+from meds_mcp.server.tools.task_tools import (
+    get_task_prediction,
+    get_task_tool_definition,
+    tool_name_to_task,
+)
+
+try:
+    from meds_mcp.experiments.task_config import (
+        ALL_TASKS,
+        is_binary_task,
+        is_categorical_task,
+    )
+    from meds_mcp.experiments.formatters import (
+        RESPONSE_FORMAT_BINARY,
+        RESPONSE_FORMAT_CATEGORICAL,
+    )
+except Exception:
+    ALL_TASKS = set()  # type: ignore[misc, assignment]
+    is_binary_task = lambda _: False  # type: ignore[misc, assignment]
+    is_categorical_task = lambda _: False  # type: ignore[misc, assignment]
+    RESPONSE_FORMAT_BINARY = "Answer with yes or no only. Do not include reasoning."
+    RESPONSE_FORMAT_CATEGORICAL = "Answer with one of: severe, moderate, mild, normal only. Do not include reasoning."
 
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
@@ -56,9 +78,12 @@ def _tool_error(name: str, message: str) -> str:
 async def execute_cohort_tool_call(
     tool_call_dict: Dict[str, Any],
     patient_ids: List[str],
+    task_name: Optional[str] = None,
+    prediction_time: Optional[str] = None,
 ) -> str:
     """
-    Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
+    Execute a tool call for cohort chat. Handles Vista task tools (get_<task>_prediction)
+    via get_task_prediction (CSVs in data/collections/vista_bench/labels), get_readmission_prediction,
     and delegates others (e.g. calculator) to the sync execute_tool_call.
     """
     try:
@@ -69,8 +94,32 @@ async def execute_cohort_tool_call(
         except json.JSONDecodeError:
             return _tool_error(name, f"Invalid arguments for {name}")
 
+        person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
+        pred_time = args.get("prediction_time") or prediction_time
+
+        # Vista task tools: only allow the tool for the current task (model must not use other tasks' tools)
+        resolved_task = tool_name_to_task(name)
+        if resolved_task is not None:
+            if task_name is None:
+                return _tool_error(name, "Task prediction tools are not available for this request.")
+            if resolved_task != task_name:
+                return _tool_error(
+                    name,
+                    f"Tool not available for this request. This request is for task '{task_name}' only.",
+                )
+            if not person_id:
+                return json.dumps({
+                    "error": "No person_id provided and cohort has no patient IDs.",
+                    "label": None,
+                })
+            result = await get_task_prediction(
+                person_id=person_id,
+                task_name=resolved_task,
+                prediction_time=pred_time,
+            )
+            return json.dumps(result)
+
         if name == "get_readmission_prediction":
-            person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
             if not person_id:
                 return json.dumps({
                     "error": "No person_id provided and cohort has no patient IDs.",
@@ -124,6 +173,10 @@ class CohortChatRequest(BaseModel):
     generation_config: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional overrides for generation parameters (temperature, top_p, max_tokens, etc.)",
+    )
+    use_tools: bool = Field(
+        True,
+        description="If True, enable tool calling (calculator, get_readmission_prediction). If False, LLM-only response.",
     )
     debug: bool = Field(
         False,
@@ -277,22 +330,49 @@ async def cohort_chat(payload: CohortChatRequest):
             prediction_time=payload.prediction_time,
             task_name=payload.task_name,
             max_tokens=4096,
-            include_event_key=True,
+            include_event_key=False,
         )
         if context_text:
             context_parts.append(f"Patient {pid}:\n{context_text}")
 
     cohort_context_block = "\n\n".join(context_parts) if context_parts else "(No events in window.)"
 
+    task_name = (payload.task_name or "").strip()
+    is_vista_binary = task_name and is_binary_task(task_name)
+    is_vista_categorical = task_name and is_categorical_task(task_name)
+
     system_prompt = (
         "You are a clinical data analyst reviewing a cohort of patients. "
-        "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines). "
-        "Each event line may end with [[event_key]] for citation. "
-        "Whenever you make a statement supported by a specific event, append [[event_key]].\n\n"
+        "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines).\n\n"
+    )
+    if is_vista_binary:
+        system_prompt += (
+            "For this task you must reply with ONLY a single word: either \"yes\" or \"no\". "
+            "Do not include any reasoning, explanation, or discussion.\n\n"
+        )
+    elif is_vista_categorical:
+        system_prompt += (
+            "For this task you must reply with ONLY one word: severe, moderate, mild, or normal. "
+            "Do not include any reasoning, explanation, or discussion.\n\n"
+        )
+    system_prompt += (
         "You have access to tools: a calculator (for any arithmetic) and "
         "get_readmission_prediction (to look up predicted readmission for a patient in the cohort). "
         "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
     )
+
+    # For Vista bench: binary/categorical tasks get strict single-word format; otherwise cohort summary.
+    if is_vista_binary:
+        question_instruction = RESPONSE_FORMAT_BINARY
+    elif is_vista_categorical:
+        question_instruction = RESPONSE_FORMAT_CATEGORICAL
+    else:
+        question_instruction = (
+            "Please provide:\n"
+            "- A concise summary of key patterns across these patients.\n"
+            "- Any notable differences between them (if visible).\n"
+            "- Brief mention of limitations (e.g., missing labs, limited time span) if relevant."
+        )
 
     user_prompt = textwrap.dedent(
         f"""
@@ -300,34 +380,43 @@ async def cohort_chat(payload: CohortChatRequest):
 
         {cohort_context_block}
 
-        QUESTION ABOUT THIS COHORT:
+        QUESTION:
         {payload.question}
 
-        Please provide:
-        - A concise summary of key patterns across these patients.
-        - Any notable differences between them (if visible).
-        - Brief mention of limitations (e.g., missing labs, limited time span) if relevant.
+        {question_instruction}
         """
     )
 
-    if payload.debug:
-        print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
-        print("--- COHORT CONTEXT BLOCK ---")
-        print(cohort_context_block)
-        print("--- FULL USER PROMPT ---")
-        print(user_prompt)
-        print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
+    # if payload.debug:
+    #     print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
+    #     print("--- COHORT CONTEXT BLOCK ---")
+    #     print(cohort_context_block)
+    #     print("--- FULL USER PROMPT ---")
+    #     print(user_prompt)
+    #     print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
 
     # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
     gen_cfg = get_default_generation_config(payload.generation_config)
 
-    tools = [
-        get_readmission_tool_definition(),
-        get_calculator_tool_definition(),
-    ]
+    # Vista tasks only: expose task-specific tool (CSVs in vista_bench/labels) + calculator. Otherwise no tools (fairness: no extra tools for non-Vista).
+    payload_task = (payload.task_name or "").strip()
+    if payload_task and payload_task in ALL_TASKS:
+        tools = [
+            get_task_tool_definition(payload_task, payload.prediction_time),
+            get_calculator_tool_definition(),
+        ]
+    else:
+        tools = []
     used_ids = [entry["patient_id"] for entry in cohort_context]
+
+    if payload.debug:
+        tool_names = [t.get("function", {}).get("name") for t in tools]
+        print(
+            f"[DEBUG tool calling] task_name={payload_task or '(none)'} | "
+            f"tools exposed={tool_names} | use_tools={payload.use_tools} (effective={payload.use_tools and len(tools) > 0})"
+        )
 
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -336,36 +425,44 @@ async def cohort_chat(payload: CohortChatRequest):
 
     max_tool_iterations = 5
     response = None
-    use_tools = True
+    use_tools = payload.use_tools and len(tools) > 0
 
     try:
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                **gen_cfg,
-            )
-            logger.info(
-                "Cohort chat: request sent with tools=%s",
-                [t.get("function", {}).get("name") for t in tools],
-            )
-        except (TypeError, ValueError, Exception) as tools_err:
-            err_msg = str(tools_err)
-            if "tool" in err_msg.lower() or "parse" in err_msg.lower() or "NoneType" in err_msg:
-                logger.warning(
-                    "Cohort chat: API failed with tools, falling back to no tools: %s",
-                    err_msg[:200],
-                )
-                use_tools = False
+        if use_tools:
+            try:
                 response = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
                     **gen_cfg,
                 )
-            else:
-                raise
+                logger.info(
+                    "Cohort chat: request sent with tools=%s",
+                    [t.get("function", {}).get("name") for t in tools],
+                )
+            except (TypeError, ValueError, Exception) as tools_err:
+                err_msg = str(tools_err)
+                if "tool" in err_msg.lower() or "parse" in err_msg.lower() or "NoneType" in err_msg:
+                    logger.warning(
+                        "Cohort chat: API failed with tools, falling back to no tools: %s",
+                        err_msg[:200],
+                    )
+                    use_tools = False
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        **gen_cfg,
+                    )
+                else:
+                    raise
+        else:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **gen_cfg,
+            )
+            logger.info("Cohort chat: request sent without tools (LLM-only)")
 
         iteration = 0
         while use_tools and iteration < max_tool_iterations:
@@ -419,9 +516,18 @@ async def cohort_chat(payload: CohortChatRequest):
                 tc_dict = _tool_call_to_dict(tc)
                 tool_name = tc_dict.get("function", {}).get("name", "?")
                 tool_args = tc_dict.get("function", {}).get("arguments", "{}")
-                print(f"Cohort chat: executing tool: {tool_name} (args: {tool_args})")
                 logger.info("Cohort chat: executing tool: %s with args: %s", tool_name, tool_args)
-                result = await execute_cohort_tool_call(tc_dict, used_ids)
+                if payload.debug:
+                    print(
+                        f"[DEBUG tool calling] task={payload.task_name or '(none)'} | "
+                        f"executing tool={tool_name} | args={tool_args}"
+                    )
+                result = await execute_cohort_tool_call(
+                    tc_dict,
+                    used_ids,
+                    task_name=payload.task_name,
+                    prediction_time=payload.prediction_time,
+                )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_dict.get("id", ""),

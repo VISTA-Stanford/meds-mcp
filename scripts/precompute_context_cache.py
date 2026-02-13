@@ -161,7 +161,7 @@ def main():
                     prediction_time=pt,
                     task_name=task_name,
                     max_tokens=4096,
-                    include_event_key=True,
+                    include_event_key=False,
                 )
                 if context_text:
                     context_cache[key] = context_text

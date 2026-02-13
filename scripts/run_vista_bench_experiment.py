@@ -107,8 +107,16 @@ def _is_retryable_error(exc: Exception) -> bool:
     return "429" in msg or "token limit" in msg or "rate limit" in msg
 
 
-def _cache_key(patient_id: str, prediction_time: str, task_name: str, use_tools: bool) -> tuple:
-    """Cache key for API responses."""
+def _cache_key(
+    patient_id: str,
+    prediction_time: str,
+    task_name: str,
+    use_tools: bool,
+    model: Optional[str] = None,
+) -> tuple:
+    """Cache key for API responses. Include model when set so different models don't share cache."""
+    if model:
+        return (patient_id, prediction_time, task_name, use_tools, model)
     return (patient_id, prediction_time, task_name, use_tools)
 
 
@@ -181,6 +189,7 @@ async def run_single_prediction(
     precomputed_events: Optional[dict] = None,
     precomputed_context_cache: Optional[dict] = None,
     debug: bool = False,
+    model: Optional[str] = None,
 ) -> str:
     """Run cohort_chat for one (patient, task) with LLM only or LLM+tool.
     Retries on 429/token limit with backoff. Uses cache when provided.
@@ -190,7 +199,7 @@ async def run_single_prediction(
     from meds_mcp.server.api.cohort_chat import cohort_chat
     from meds_mcp.server.api.cohort_chat import CohortChatRequest
 
-    key = _cache_key(patient_id, prediction_time, task_name, use_tools)
+    key = _cache_key(patient_id, prediction_time, task_name, use_tools, model=model)
     if cache is not None and key in cache:
         return cache[key]
 
@@ -214,6 +223,7 @@ async def run_single_prediction(
         precomputed_context=pc,
         precomputed_context_text=pc_text,
         debug=debug,
+        model=model,
     )
     last_exc = None
     for attempt in range(max_retries + 1):
@@ -262,6 +272,7 @@ async def _process_single_row(
     precomputed_events: Optional[dict] = None,
     precomputed_context_cache: Optional[dict] = None,
     debug: bool = False,
+    model: Optional[str] = None,
 ) -> Tuple[Tuple[str, str, str], dict]:
     """Process one row: LLM-only + LLM+tool (in parallel). Returns (row_key, record)."""
     from meds_mcp.experiments.formatters import ground_truth_to_normalized
@@ -277,12 +288,12 @@ async def _process_single_row(
             run_single_prediction(
                 patient_id, prediction_time, task_name, question, use_tools=False,
                 max_retries=max_retries, cache=cache, precomputed_events=precomputed_events,
-                precomputed_context_cache=precomputed_context_cache, debug=debug,
+                precomputed_context_cache=precomputed_context_cache, debug=debug, model=model,
             ),
             run_single_prediction(
                 patient_id, prediction_time, task_name, question, use_tools=True,
                 max_retries=max_retries, cache=cache, precomputed_events=precomputed_events,
-                precomputed_context_cache=precomputed_context_cache, debug=debug,
+                precomputed_context_cache=precomputed_context_cache, debug=debug, model=model,
             ),
         )
         await asyncio.sleep(delay_seconds)
@@ -376,6 +387,9 @@ async def run_experiment_async(
     task_summaries = {}
     run_start = time.perf_counter()
     sem = asyncio.Semaphore(args.batch_size)
+    model_arg = getattr(args, "model", None)
+    if model_arg:
+        logging.info("Using model: %s", model_arg)
 
     with open(output_path, write_mode) as f:
         for task_name in tasks_to_run:
@@ -432,6 +446,7 @@ async def run_experiment_async(
                     precomputed_events=precomputed_events,
                     precomputed_context_cache=precomputed_context_cache,
                     debug=getattr(args, "debug", False),
+                    model=model_arg,
                 )
                 if pbar:
                     pbar.update(1)
@@ -594,6 +609,12 @@ def main():
         "--debug",
         action="store_true",
         help="Print full context (cohort block + user prompt) to stdout before each LLM/tool call.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="LLM model name (e.g. apim:gpt-4.1-mini). If not set, uses server default.",
     )
     args = parser.parse_args()
 

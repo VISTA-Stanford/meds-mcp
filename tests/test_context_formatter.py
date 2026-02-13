@@ -20,6 +20,7 @@ class TestFormatEventLineUnits:
     """Ensure value and unit (and unit fallbacks) are formatted correctly in context lines."""
 
     def test_value_and_unit_top_level(self):
+        """Without unit_source_value, only value is shown (no unit)."""
         ev = {
             "code": "LOINC/8478-0",
             "name": "Mean blood pressure",
@@ -28,8 +29,7 @@ class TestFormatEventLineUnits:
         }
         line = _format_event_line(ev, is_lab=False, event_key="p1:ev0")
         assert "93" in line
-        assert "mmHg" in line
-        assert line == "LOINC/8478-0 | Mean blood pressure | 93 mmHg [[p1:ev0]]"
+        assert line == "LOINC/8478-0 | Mean blood pressure | 93 [[p1:ev0]]"
 
     def test_value_and_unit_source_value(self):
         """unit_source_value is used when unit is missing (e.g. OMOP-style XML)."""
@@ -45,7 +45,7 @@ class TestFormatEventLineUnits:
         assert line.strip().endswith("98 %")
 
     def test_value_and_units_plural(self):
-        """'units' attribute is used when unit/unit_source_value are missing."""
+        """Without unit_source_value, only value is shown (units attribute is not used for context)."""
         ev = {
             "code": "LOINC/8867-4",
             "name": "Heart rate",
@@ -53,11 +53,11 @@ class TestFormatEventLineUnits:
             "units": "/min",
         }
         line = _format_event_line(ev, is_lab=False, event_key="p2:ev1")
-        assert "72" in line and "/min" in line
-        assert "72 /min" in line
+        assert "72" in line
+        assert line == "LOINC/8867-4 | Heart rate | 72 [[p2:ev1]]"
 
     def test_unit_from_metadata(self):
-        """Unit in metadata (e.g. from xml_loader) is used."""
+        """Without unit_source_value in metadata, only value is shown."""
         ev = {
             "code": "LOINC/8462-4",
             "name": "Diastolic blood pressure",
@@ -65,7 +65,8 @@ class TestFormatEventLineUnits:
             "metadata": {"unit": "mmHg"},
         }
         line = _format_event_line(ev, is_lab=False, event_key="")
-        assert "60" in line and "mmHg" in line
+        assert "60" in line
+        assert line.strip().endswith("60")
 
     def test_unit_source_value_from_metadata(self):
         """unit_source_value in metadata is used."""
@@ -79,8 +80,8 @@ class TestFormatEventLineUnits:
         line = _format_event_line(ev, is_lab=False, event_key="")
         assert "7.4" in line
 
-    def test_prefer_unit_over_unit_source_value(self):
-        """When both unit and unit_source_value exist, unit is used (first in fallback chain)."""
+    def test_unit_source_value_used_when_present(self):
+        """When unit_source_value is present (e.g. from LUMIA timeline), it is shown after value."""
         ev = {
             "code": "LOINC/8480-6",
             "name": "Systolic blood pressure",
@@ -89,8 +90,7 @@ class TestFormatEventLineUnits:
             "unit_source_value": "mm[Hg]",
         }
         line = _format_event_line(ev, is_lab=False, event_key="")
-        assert "120 mmHg" in line
-        assert "mm[Hg]" not in line
+        assert "120 mm[Hg]" in line
 
     def test_no_value_no_unit(self):
         """Event with only code and name: no value/unit segment."""
@@ -111,20 +111,20 @@ class TestFormatEventLineUnits:
 class TestDeltaEncodeUnits:
     """Full delta-encoded context includes value and unit in event lines."""
 
-    def test_delta_encode_includes_value_unit(self):
+    def test_delta_encode_includes_value_unit_source_value(self):
         events = [
             {
                 "event_id": "p1_enc0_ent0_ev0",
                 "timestamp": "2023-01-15 10:00",
                 "code": "LOINC/8478-0",
                 "name": "Mean blood pressure",
-                "value": "93",
-                "unit": "mmHg",
+                "value": "76",
+                "unit_source_value": "mmHg",
             },
         ]
         out = _delta_encode_events(events, patient_id="p1", is_lab_task=False, include_event_key=True)
-        assert "93 mmHg" in out
-        assert "LOINC/8478-0 | Mean blood pressure | 93 mmHg" in out
+        assert "76 mmHg" in out
+        assert "LOINC/8478-0 | Mean blood pressure | 76 mmHg" in out
 
     def test_format_patient_context_includes_unit(self):
         events = [
@@ -166,6 +166,7 @@ class TestVisitFilterUnitParsing:
         d = _event_elem_to_dict(elem, "2023-01-15 10:00", "p1", 0, 0, 0)
         assert d["value"] == "98"
         assert d["unit"] == "%"
+        assert d["unit_source_value"] == "%"
 
     def test_event_elem_units_fallback(self):
         from lxml import etree
@@ -190,6 +191,7 @@ class TestVisitFilterUnitParsing:
         elem = etree.fromstring(xml)
         d = _event_elem_to_dict(elem, "2023-01-15 10:00", "p1", 0, 0, 0)
         assert d["unit"] == "mmHg"
+        assert d["unit_source_value"] == "mm[Hg]"
 
 
 @pytest.mark.unit

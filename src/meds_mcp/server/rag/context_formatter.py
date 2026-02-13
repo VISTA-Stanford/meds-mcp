@@ -113,23 +113,16 @@ def _format_event_line(
     is_lab: bool,
     event_key: str,
 ) -> str:
-    """One line: CODE | Name [| value unit]; optional [[event_key]]. Value/unit shown whenever present."""
+    """One line: CODE | Name [| value [unit_source_value]]; optional [[event_key]].
+    Unit is shown only when unit_source_value is present in the LUMIA timeline; otherwise only value."""
     code = ev.get("code") or ""
     name = ev.get("name") or ev.get("event_type") or ""
     parts = [f"{code} | {name}".strip() or "?"]
     value = ev.get("value") or ev.get("metadata", {}).get("value") or ""
     meta = ev.get("metadata") or {}
-    unit = (
-        ev.get("unit")
-        or meta.get("unit")
-        or ev.get("unit_source_value")
-        or meta.get("unit_source_value")
-        or ev.get("units")
-        or meta.get("units")
-        or ""
-    )
-    if value or unit:
-        parts.append(f"{value} {unit}".strip())
+    unit_source_value = ev.get("unit_source_value") or meta.get("unit_source_value") or ""
+    if value or unit_source_value:
+        parts.append(f"{value} {unit_source_value}".strip())
     line = " | ".join(parts)
     if event_key:
         line = f"{line} [[{event_key}]]"
@@ -140,7 +133,7 @@ def _delta_encode_events(
     events: List[Dict[str, Any]],
     patient_id: str,
     is_lab_task: bool,
-    include_event_key: bool = True,
+    include_event_key: bool = False,
 ) -> str:
     """
     Delta encoding: emit timestamp when it changes, then event lines.
@@ -187,7 +180,7 @@ def format_patient_context(
     prediction_time: Optional[str] = None,
     task_name: Optional[str] = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    include_event_key: bool = True,
+    include_event_key: bool = False,
 ) -> str:
     """
     Build context string for one patient:
