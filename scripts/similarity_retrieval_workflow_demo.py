@@ -318,7 +318,7 @@ def main():
     parser.add_argument(
         "--llm-model",
         type=str,
-        default="apim:gpt-4.1-mini",
+        default="apim:gpt-4.1",
         help="LLM model to use for vignette generation",
     )
     parser.add_argument(
@@ -372,7 +372,7 @@ def main():
     try:
         llm_adapter = SecureLLMSummarizer(
             model=args.llm_model,
-            generation_overrides={"max_tokens": 1024, "temperature": 0.2},
+            generation_overrides={"max_tokens": 2048, "temperature": 0.2},
             use_dspy=args.use_dspy,
         )
         print(f"\n✓ LLM initialized with {args.llm_model}")
