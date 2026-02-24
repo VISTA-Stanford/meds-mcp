@@ -11,12 +11,8 @@ from typing import Any, Dict, Optional
 
 from meds_mcp.experiments.task_config import (
     ALL_TASKS,
-    BINARY_TASKS,
-    CATEGORICAL_TASKS,
     get_csv_path_for_task,
-    is_binary_task,
 )
-from meds_mcp.experiments.formatters import NUM_TO_STR
 
 
 def _parse_prediction_time(ts: Optional[str]) -> Optional[str]:
@@ -37,10 +33,8 @@ async def get_task_prediction(
     csv_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Look up the label for a patient from the task's CSV.
-    Used by experiment tools - returns ground truth for that (patient_id, prediction_time).
-    Binary tasks: label is true/false -> returned as yes/no
-    Categorical tasks: label is 0,1,2,3 -> returned as normal,mild,moderate,severe
+    Look up the label for a patient from the task's CSV (one row per patient in preprocessed data).
+    Returns ground truth as yes/no for that (patient_id, prediction_time).
     """
     if task_name not in ALL_TASKS:
         return {
@@ -56,7 +50,6 @@ async def get_task_prediction(
             "label": None,
         }
     pred_norm = _parse_prediction_time(prediction_time) if prediction_time else None
-    is_binary = is_binary_task(task_name)
 
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
@@ -74,26 +67,11 @@ async def get_task_prediction(
                     row_pt = _parse_prediction_time(row.get("prediction_time"))
                     if row_pt != pred_norm:
                         continue
-                raw_label = (row.get("label") or "").strip()
-                if is_binary:
-                    label_str = "yes" if raw_label.lower() in ("true", "1", "yes") else "no"
-                    return {
-                        "patient_id": person_id,
-                        "label": label_str,
-                        "task": task_name,
-                    }
-                # Categorical: 0,1,2,3 -> normal,mild,moderate,severe
-                try:
-                    n = int(raw_label)
-                    label_str = NUM_TO_STR.get(n, str(n))
-                    numeric = n
-                except (ValueError, TypeError):
-                    label_str = raw_label or None
-                    numeric = None
+                raw_label = (row.get("label") or row.get("value") or "").strip().lower()
+                label_str = "yes" if raw_label in ("true", "1", "yes") else "no"
                 return {
                     "patient_id": person_id,
                     "label": label_str,
-                    "numeric": numeric,
                     "task": task_name,
                 }
     except OSError as e:

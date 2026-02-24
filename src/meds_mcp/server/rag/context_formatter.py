@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Lab tasks: add value/unit and collapse by day
 try:
-    from meds_mcp.experiments.task_config import CATEGORICAL_TASKS
-    LAB_TASKS = set(CATEGORICAL_TASKS)  # lab_anemia, lab_hyperkalemia, etc.
+    from meds_mcp.experiments.task_config import LAB_TASK_NAMES
+    LAB_TASKS = LAB_TASK_NAMES
 except Exception:
     LAB_TASKS = set()
 

@@ -73,6 +73,9 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
+    # Only set from config if user did not already set VISTA_LABELS_DIR (env takes precedence)
+    if config.get("labels_dir") and not os.environ.get("VISTA_LABELS_DIR"):
+        os.environ["VISTA_LABELS_DIR"] = config["labels_dir"]
     data_dir = config.get("data", {}).get("corpus_dir") or os.getenv(
         "DATA_DIR", "data/collections/vista_bench/thoracic_cohort_lumia"
     )

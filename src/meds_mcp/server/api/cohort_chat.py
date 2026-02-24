@@ -37,18 +37,12 @@ try:
     from meds_mcp.experiments.task_config import (
         ALL_TASKS,
         is_binary_task,
-        is_categorical_task,
     )
-    from meds_mcp.experiments.formatters import (
-        RESPONSE_FORMAT_BINARY,
-        RESPONSE_FORMAT_CATEGORICAL,
-    )
+    from meds_mcp.experiments.formatters import RESPONSE_FORMAT_BINARY
 except Exception:
     ALL_TASKS = set()  # type: ignore[misc, assignment]
     is_binary_task = lambda _: False  # type: ignore[misc, assignment]
-    is_categorical_task = lambda _: False  # type: ignore[misc, assignment]
     RESPONSE_FORMAT_BINARY = "Answer with yes or no only. Do not include reasoning."
-    RESPONSE_FORMAT_CATEGORICAL = "Answer with one of: severe, moderate, mild, normal only. Do not include reasoning."
 
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
@@ -178,6 +172,10 @@ class CohortChatRequest(BaseModel):
         True,
         description="If True, enable tool calling (calculator, get_readmission_prediction). If False, LLM-only response.",
     )
+    inject_tool_results: bool = Field(
+        False,
+        description="If True, pre-fetch task prediction per patient and inject 'tool already called; result: X' into context; do not expose the task tool (single-turn).",
+    )
     debug: bool = Field(
         False,
         description="If true, print the full context (cohort block + user prompt) to stdout before the LLM/tool call.",
@@ -264,6 +262,18 @@ async def cohort_chat(payload: CohortChatRequest):
             detail="No events found for the selected patients (after filtering)",
         )
 
+    # Pre-fetch task prediction per patient when inject_tool_results (single-turn: result in context, no tool exposed)
+    payload_task = (payload.task_name or "").strip()
+    tool_results_by_patient: Dict[str, tuple] = {}
+    if payload.inject_tool_results and payload_task and payload_task in ALL_TASKS:
+        tool_def = get_task_tool_definition(payload_task, payload.prediction_time)
+        tool_name = tool_def.get("function", {}).get("name", f"get_{payload_task}_prediction")
+        for entry in cohort_context:
+            pid = entry["patient_id"]
+            result = await get_task_prediction(pid, payload_task, payload.prediction_time)
+            label = result.get("label") if result and "error" not in result else None
+            tool_results_by_patient[pid] = (tool_name, label)
+
     # 2) Build context: delta-encoded, filtered by prediction_time, last 4096 tokens per patient
     evidence_data: Dict[str, List[str]] = {}
     event_index: Dict[str, Dict[str, Any]] = {}
@@ -275,7 +285,12 @@ async def cohort_chat(payload: CohortChatRequest):
         if "context_text" in entry:
             # Precomputed formatted context (e.g. from context cache)
             if entry["context_text"]:
-                context_parts.append(f"Patient {pid}:\n{entry['context_text']}")
+                block = f"Patient {pid}:\n{entry['context_text']}"
+                if payload.inject_tool_results and pid in tool_results_by_patient:
+                    tname, label = tool_results_by_patient[pid]
+                    if label is not None:
+                        block += f"\n\nThe {tname} tool was already called for this patient; result: {label}."
+                context_parts.append(block)
             continue
 
         events = entry["events"]
@@ -337,27 +352,31 @@ async def cohort_chat(payload: CohortChatRequest):
             include_event_key=False,
         )
         if context_text:
-            context_parts.append(f"Patient {pid}:\n{context_text}")
+            block = f"Patient {pid}:\n{context_text}"
+            if payload.inject_tool_results and pid in tool_results_by_patient:
+                tname, label = tool_results_by_patient[pid]
+                if label is not None:
+                    block += f"\n\nThe {tname} tool was already called for this patient; result: {label}."
+            context_parts.append(block)
 
     cohort_context_block = "\n\n".join(context_parts) if context_parts else "(No events in window.)"
 
-    task_name = (payload.task_name or "").strip()
-    is_vista_binary = task_name and is_binary_task(task_name)
-    is_vista_categorical = task_name and is_categorical_task(task_name)
+    task_name = payload_task
+    is_vista_task = task_name and task_name in ALL_TASKS
 
     system_prompt = (
         "You are a clinical data analyst reviewing a cohort of patients. "
         "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines).\n\n"
     )
-    if is_vista_binary:
+    if is_vista_task:
         system_prompt += (
             "For this task you must reply with ONLY a single word: either \"yes\" or \"no\". "
             "Do not include any reasoning, explanation, or discussion.\n\n"
         )
-    elif is_vista_categorical:
+    if payload.inject_tool_results and task_name and task_name in ALL_TASKS:
         system_prompt += (
-            "For this task you must reply with ONLY one word: severe, moderate, mild, or normal. "
-            "Do not include any reasoning, explanation, or discussion.\n\n"
+            "The prediction tool has already been run for each patient; the results are included in each patient's block. "
+            "Use those results to answer. Do not call any prediction tool.\n\n"
         )
     system_prompt += (
         "You have access to tools: a calculator (for any arithmetic) and "
@@ -365,11 +384,9 @@ async def cohort_chat(payload: CohortChatRequest):
         "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
     )
 
-    # For Vista bench: binary/categorical tasks get strict single-word format; otherwise cohort summary.
-    if is_vista_binary:
+    # For Vista/EHRSHOT tasks: binary yes/no only; otherwise cohort summary.
+    if is_vista_task:
         question_instruction = RESPONSE_FORMAT_BINARY
-    elif is_vista_categorical:
-        question_instruction = RESPONSE_FORMAT_CATEGORICAL
     else:
         question_instruction = (
             "Please provide:\n"
@@ -391,26 +408,27 @@ async def cohort_chat(payload: CohortChatRequest):
         """
     )
 
-    # if payload.debug:
-    #     print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
-    #     print("--- COHORT CONTEXT BLOCK ---")
-    #     print(cohort_context_block)
-    #     print("--- FULL USER PROMPT ---")
-    #     print(user_prompt)
-    #     print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
+    if payload.debug:
+        print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
+        print("--- COHORT CONTEXT BLOCK ---")
+        print(cohort_context_block)
+        print("--- FULL USER PROMPT ---")
+        print(user_prompt)
+        print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
 
     # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
     gen_cfg = get_default_generation_config(payload.generation_config)
 
-    # Vista tasks only: expose task-specific tool (CSVs in vista_bench/labels) + calculator. Otherwise no tools (fairness: no extra tools for non-Vista).
-    payload_task = (payload.task_name or "").strip()
-    if payload_task and payload_task in ALL_TASKS:
+    # Vista tasks only: expose task-specific tool + calculator. When inject_tool_results, do not expose task tool (single-turn).
+    if payload_task and payload_task in ALL_TASKS and not payload.inject_tool_results:
         tools = [
             get_task_tool_definition(payload_task, payload.prediction_time),
             get_calculator_tool_definition(),
         ]
+    elif payload.inject_tool_results:
+        tools = [get_calculator_tool_definition()]
     else:
         tools = []
     used_ids = [entry["patient_id"] for entry in cohort_context]

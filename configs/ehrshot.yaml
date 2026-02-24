@@ -1,0 +1,34 @@
+# EHRSHOT experiment: MEDS corpus + task labels (binary tasks only).
+# Labels root: use labels/labels_100 after running sample_task_labels.py with
+# --meds-dir and --one-label-per-patient.
+
+# Server settings
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# Data directories
+data:
+  ontology_dir: "data/athena_omop_ontologies"
+  # EHRSHOT MEDS corpus (XML per patient)
+  corpus_dir: "data/collections/ehrshot/meds_corpus"
+  cache_dir: "data/cache/ehrshot_indexes"
+  use_lazy_ontology: false
+  load_all_patients: true
+
+# Labels root for task CSVs (override VISTA_LABELS_DIR when using this config).
+# Point to labels_100 after creating sampled labels.
+labels_dir: "data/collections/ehrshot/labels/labels_100"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Meilisearch
+meilisearch:
+  enabled: true
+  host: "http://localhost:7700"
+  index_name: "patients"
+  auto_index: true
+  reset_on_startup: false

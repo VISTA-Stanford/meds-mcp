@@ -222,6 +222,7 @@ async def run_single_prediction(
         prediction_time=prediction_time,
         task_name=task_name,
         use_tools=use_tools,
+        inject_tool_results=use_tools,  # single-turn: tool result in context, no tool call
         max_events_per_patient=500,
         precomputed_context=pc,
         precomputed_context_text=pc_text,
@@ -288,7 +289,8 @@ async def _process_single_row(
     patient_id = row.get("patient_id")
     prediction_time = row.get("prediction_time")
     ground_truth_raw = row.get("label", "")
-    ground_truth_norm = ground_truth_to_normalized(ground_truth_raw, is_binary)
+    # All tasks are binary (yes/no)
+    ground_truth_norm = ground_truth_to_normalized(ground_truth_raw, is_binary=True)
     row_key = (patient_id, task_name, prediction_time)
 
     async with sem:
@@ -310,9 +312,9 @@ async def _process_single_row(
     answer_tool = result_tool["answer"]
     tool_executions = result_tool.get("tool_executions", 0)
 
-    from meds_mcp.experiments.formatters import normalize_binary, normalize_categorical
-    norm_llm = normalize_binary(answer_llm) if is_binary else normalize_categorical(answer_llm)
-    norm_tool = normalize_binary(answer_tool) if is_binary else normalize_categorical(answer_tool)
+    from meds_mcp.experiments.formatters import normalize_binary
+    norm_llm = normalize_binary(answer_llm)
+    norm_tool = normalize_binary(answer_tool)
 
     record = {
         "patient_id": patient_id,
@@ -641,6 +643,9 @@ def main():
         sys.exit(1)
 
     config = load_config(args.config)
+    # Only set from config if user did not already set VISTA_LABELS_DIR (env takes precedence)
+    if config.get("labels_dir") and not os.environ.get("VISTA_LABELS_DIR"):
+        os.environ["VISTA_LABELS_DIR"] = config["labels_dir"]
 
     if args.precompute:
         import subprocess

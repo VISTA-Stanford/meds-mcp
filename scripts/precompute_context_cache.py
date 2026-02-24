@@ -85,6 +85,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # Wire labels_dir from config so get_csv_path_for_task uses correct labels root (env takes precedence)
+    config = load_config(args.config)
+    if config.get("labels_dir") and not os.environ.get("VISTA_LABELS_DIR"):
+        os.environ["VISTA_LABELS_DIR"] = config["labels_dir"]
+
     from meds_mcp.experiments.task_config import (
         ALL_TASKS,
         get_csv_path_for_task,
@@ -110,7 +115,6 @@ def main():
     # When not using events cache, we need XML path for get_events_for_single_visit_from_xml
     data_path = None
     if not events_cache:
-        config = load_config(args.config)
         data_dir = config.get("data", {}).get("corpus_dir") or os.getenv(
             "DATA_DIR", "data/collections/vista_bench/thoracic_cohort_lumia"
         )

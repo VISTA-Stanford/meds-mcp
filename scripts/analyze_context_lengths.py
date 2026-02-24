@@ -101,6 +101,23 @@ def get_single_visit_events(pid: str, prediction_time_str: str, data_dir: str) -
     return get_events_for_single_visit_from_xml(pid, prediction_time_str, data_dir)
 
 
+def get_formatted_context_tokens(pid: str, pt: str, task_name: str, events: list) -> int:
+    """Full formatted context token count (delta-encoded, collapse-by-day for lab tasks)."""
+    from meds_mcp.server.rag.context_formatter import format_patient_context, _count_tokens
+
+    if not events:
+        return 0
+    text = format_patient_context(
+        events,
+        patient_id=pid,
+        prediction_time=pt,
+        task_name=task_name,
+        max_tokens=0,
+        include_event_key=False,
+    )
+    return _count_tokens(text) if text else 0
+
+
 def collect_rows_from_task_csvs(tasks: list, limit_per_task: int = None) -> list:
     """(patient_id, prediction_time) for all rows."""
     from meds_mcp.experiments.task_config import ALL_TASKS, get_csv_path_for_task
@@ -209,6 +226,7 @@ def main():
         evs_single = get_single_visit_events(pid, pt, data_dir)
         n_all = len(evs_all)
         n_single = len(evs_single)
+        formatted_tokens = get_formatted_context_tokens(pid, pt, task_name, evs_single)
         all_history_counts.append(n_all)
         single_visit_counts.append(n_single)
         row_data.append(
@@ -218,12 +236,28 @@ def main():
                 "task_name": task_name,
                 "all_history_event_count": n_all,
                 "single_visit_event_count": n_single,
+                "formatted_context_tokens": formatted_tokens,
             }
         )
 
     k = args.token_budget
     tpe = args.tokens_per_event
     max_ev = max_events_for_token_budget(k, tpe)
+
+    # Full formatted context token count per row (delta-encoded, collapse-by-day for lab tasks)
+    formatted_context_tokens = [r["formatted_context_tokens"] for r in row_data]
+    for r in row_data:
+        r["all_history_tokens"] = int(r["all_history_event_count"] * tpe)
+    n_total = len(row_data)
+    n_4096 = sum(1 for t in formatted_context_tokens if t <= 4096)
+    n_32k = sum(1 for t in formatted_context_tokens if t <= 32768)
+    context_coverage = {
+        "total_patients": n_total,
+        "within_4096": n_4096,
+        "within_32k": n_32k,
+        "pct_within_4096": round(100.0 * n_4096 / n_total, 2) if n_total else 0,
+        "pct_within_32k": round(100.0 * n_32k / n_total, 2) if n_total else 0,
+    }
 
     # Capped distributions (what you'd actually send)
     all_capped = [min(c, max_ev) for c in all_history_counts]
@@ -239,6 +273,7 @@ def main():
             "max_events_for_budget": max_ev,
             "tasks_included": tasks if args.task else "all",
         },
+        "context_coverage": context_coverage,
         "all_history_prior_to_t": {
             "summary": compute_distribution(all_history_counts),
             "histogram": compute_histogram(all_history_counts, bins),
@@ -280,11 +315,36 @@ def main():
     for kk, vv in output["single_visit_capped_at_k_tokens"]["summary"].items():
         print(f"     {kk}: {vv}")
 
-    # Save
+    print("\n4. CONTEXT COVERAGE (formatted single-visit context, delta-encoded, collapse-by-day for lab tasks)")
+    cov = output["context_coverage"]
+    print(f"   Within 4096 tokens: {cov['within_4096']} / {cov['total_patients']} ({cov['pct_within_4096']}%)")
+    print(f"   Within 32K tokens:  {cov['within_32k']} / {cov['total_patients']} ({cov['pct_within_32k']}%)")
+
+    # Save (include formatted token counts for reproducibility)
+    output["formatted_context_tokens"] = formatted_context_tokens
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(output, f, indent=2)
+
+    # Plot: histogram of context length distribution (x = context length, y = count of patients)
+    try:
+        import matplotlib.pyplot as plt
+        tokens = [t for t in formatted_context_tokens if t >= 0]
+        if tokens:
+            fig, ax = plt.subplots(figsize=(9, 5))
+            bins = min(50, max(20, len(tokens) // 10))
+            ax.hist(tokens, bins=bins, color="steelblue", alpha=0.8, edgecolor="white")
+            ax.set_xlabel("Full context length (tokens)")
+            ax.set_ylabel("Number of patients")
+            ax.set_title("Context length distribution (single-visit, delta-encoded, collapse-by-day for lab tasks)")
+            plt.tight_layout()
+            plot_path = out_path.parent / "context_coverage.png"
+            plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+            plt.close()
+            print(f"   Plot saved to {plot_path}")
+    except ImportError:
+        pass
 
     print(f"\nResults saved to {out_path} (plot-ready: raw_counts, histogram, per_row)")
     return output

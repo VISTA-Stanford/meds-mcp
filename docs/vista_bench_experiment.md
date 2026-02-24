@@ -84,7 +84,7 @@ uv run python scripts/run_vista_bench_experiment.py \
 `new_celiac`, `guo_icu`, `guo_los`, `new_lupus`, `new_acutemi`, `new_pancan`, `guo_readmission`, `new_hyperlipidemia`, `new_hypertension`
 
 **Categorical tasks** (response: severe/moderate/mild/normal):  
-`lab_anemia`, `lab_hyperkalemia`, `lab_hypoglycemia`, `lab_hypoatremia`, `lab_thrombocytopenia`
+`lab_anemia`, `lab_hyperkalemia`, `lab_hypoglycemia`, `lab_hyponatremia`, `lab_thrombocytopenia`
 
 ## Output Files
 
@@ -135,6 +135,44 @@ The summary file format:
 - `VISTA_LABELS_DIR`: Override labels directory (default: `data/collections/vista_bench/labels`)
 - `DATA_DIR`: Override corpus directory (default from config)
 - `LOAD_ALL_PATIENTS`: Set to `true` to load all patients at startup (recommended for experiments)
+
+## Balanced cohort (100 patients, 50/50) and single-turn tool
+
+You can create a **balanced cohort** of 100 patients per task (50% positive, 50% negative for binary tasks; lab tasks binarized to normal vs abnormal then 50/50). The **tool arm** is **single-turn**: the task prediction is pre-fetched and injected into each patient’s context (“tool already called; result: X”), and the task tool is not exposed, so the model answers in one turn using the injected results.
+
+1. **Create balanced cohort** (from full Vista labels):
+   ```bash
+   uv run python scripts/sample_task_labels.py \
+     --input-dir data/collections/vista_bench/labels \
+     --output-dir data/collections/vista_bench/labels_100 \
+     --n 100 \
+     --balanced \
+     --seed 42
+   ```
+
+2. **Precompute single-visit events** for the cohort (so context is unchanged and fast):
+   ```bash
+   VISTA_LABELS_DIR=data/collections/vista_bench/labels_100 uv run python scripts/precompute_single_visit_events.py --config configs/vista.yaml
+   ```
+   Optionally precompute **formatted context** cache for fastest runs:
+   ```bash
+   VISTA_LABELS_DIR=data/collections/vista_bench/labels_100 uv run python scripts/precompute_context_cache.py --config configs/vista.yaml --output-dir results
+   ```
+
+3. **Run the experiment** using the balanced labels and single-turn tool:
+   ```bash
+   VISTA_LABELS_DIR=data/collections/vista_bench/labels_100 uv run python scripts/run_vista_bench_experiment.py --config configs/vista.yaml --precompute
+   ```
+   If you precomputed context cache, pass it so the script uses it:
+   ```bash
+   VISTA_LABELS_DIR=data/collections/vista_bench/labels_100 uv run python scripts/run_vista_bench_experiment.py --config configs/vista.yaml --context-cache-path results/context_cache.json
+   ```
+   Or use `--precompute-context` to run precompute_context_cache.py before the experiment (builds context cache from events or XML).
+
+4. **Analyze results** (analysis treats lab tasks with binary labels as binary for AUROC/balance):
+   ```bash
+   uv run python scripts/analyze_vista_bench_results.py --input results/vista_bench_<timestamp>.jsonl --output-dir results
+   ```
 
 ## Future: Evaluation
 

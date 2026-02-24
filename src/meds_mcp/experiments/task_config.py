@@ -10,8 +10,7 @@ from typing import Dict, List, Optional
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _LABELS_DIR = _REPO_ROOT / "data" / "collections" / "vista_bench" / "labels"
 
-# Task type: binary (yes/no) or categorical (severe/moderate/mild/normal)
-# new_hyperlipidemia and new_hypertension are binary (first-diagnosis within one year), not lab severity.
+# All tasks are binary (yes/no). Lab tasks are binarized to normal vs abnormal in label CSVs.
 BINARY_TASKS = [
     "new_celiac",
     "guo_icu",
@@ -22,17 +21,25 @@ BINARY_TASKS = [
     "guo_readmission",
     "new_hyperlipidemia",
     "new_hypertension",
-]
-
-CATEGORICAL_TASKS = [
     "lab_anemia",
     "lab_hyperkalemia",
     "lab_hypoglycemia",
-    "lab_hypoatremia",
+    "lab_hyponatremia",
     "lab_thrombocytopenia",
 ]
 
-ALL_TASKS = BINARY_TASKS + CATEGORICAL_TASKS
+CATEGORICAL_TASKS: List[str] = []  # Kept for backward compat; all tasks treated as binary
+
+# Lab task names (for context formatting: value/unit, collapse by day)
+LAB_TASK_NAMES = {
+    "lab_anemia",
+    "lab_hyperkalemia",
+    "lab_hypoglycemia",
+    "lab_hyponatremia",
+    "lab_thrombocytopenia",
+}
+
+ALL_TASKS = BINARY_TASKS
 
 # Task name -> CSV filename (in vista_bench/labels/)
 TASK_TO_FILENAME: Dict[str, str] = {
@@ -48,7 +55,7 @@ TASK_TO_FILENAME: Dict[str, str] = {
     "lab_anemia": "labels_lab_anemia.csv",
     "lab_hyperkalemia": "labels_lab_hyperkalemia.csv",
     "lab_hypoglycemia": "labels_lab_hypoglycemia.csv",
-    "lab_hypoatremia": "labels_lab_hypoatremia.csv",
+    "lab_hyponatremia": "labels_lab_hyponatremia.csv",
     "lab_thrombocytopenia": "labels_lab_thrombocytopenia.csv",
 }
 
@@ -77,7 +84,7 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
         "This is a probabilistic model trained to predict hyperkalemia severity before the next potassium "
         "lab result. Use is optional and only recommended if lab forecasting supports the reasoning process."
     ),
-    "lab_hypoatremia": (
+    "lab_hyponatremia": (
         "This is a probabilistic model trained to predict hyponatremia severity before the next sodium lab "
         "value. The assistant may call this tool if anticipating electrolyte abnormalities is useful, but it is not required."
     ),
@@ -116,8 +123,7 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
     ),
 }
 
-# Task -> question template (one patient)
-# Categorical tasks (lab_*) expect answer in: severe, moderate, mild, or normal.
+# Task -> question template (one patient). All questions are binary (yes/no).
 TASK_QUESTIONS: Dict[str, str] = {
     "guo_readmission": "Based on this patient's health status and discharge profile, is it likely they will require rehospitalization soon after discharge?",
     "guo_los": "Based on this patient's condition at admission, is it likely that this hospitalization will require a prolonged stay?",
@@ -128,11 +134,11 @@ TASK_QUESTIONS: Dict[str, str] = {
     "new_celiac": "Based on this patient's medical history and symptoms, is it likely they will be diagnosed with celiac disease within the next year?",
     "new_lupus": "Based on this patient's clinical trajectory, is it likely they will be diagnosed with systemic lupus within the next year?",
     "new_acutemi": "Based on this patient's cardiovascular risk profile and history, is it likely they will experience a heart attack within the next year?",
-    "lab_thrombocytopenia": "Based on this patient's current condition, what is the expected severity of their next platelet count result?",
-    "lab_hyperkalemia": "Based on this patient's clinical status and medications, what is the expected severity of their next potassium level?",
-    "lab_hypoglycemia": "Based on this patient's metabolic status, what is the expected severity of their next glucose level?",
-    "lab_hypoatremia": "Based on this patient's fluid and electrolyte balance, what is the expected severity of their next sodium level?",
-    "lab_anemia": "Based on this patient's hematologic status, what is the expected severity of their next hemoglobin level?",
+    "lab_thrombocytopenia": "Based on this patient's current condition, is it likely their next platelet count will be abnormal?",
+    "lab_hyperkalemia": "Based on this patient's clinical status and medications, is it likely their next potassium level will be abnormal?",
+    "lab_hypoglycemia": "Based on this patient's metabolic status, is it likely their next glucose level will be abnormal?",
+    "lab_hyponatremia": "Based on this patient's fluid and electrolyte balance, is it likely their next sodium level will be abnormal?",
+    "lab_anemia": "Based on this patient's hematologic status, is it likely their next hemoglobin level will be abnormal?",
 }
 
 
