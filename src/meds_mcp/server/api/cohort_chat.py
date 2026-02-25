@@ -44,10 +44,35 @@ except Exception:
     is_binary_task = lambda _: False  # type: ignore[misc, assignment]
     RESPONSE_FORMAT_BINARY = "Answer with yes or no only. Do not include reasoning."
 
+# When debug=True, truncate message content beyond this for full-request JSON (readable stdout)
+_DEBUG_MAX_CONTENT_LEN = 2500
+
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
         return obj.isoformat()
     return str(obj)
+
+
+def _debug_request_payload(
+    model_name: str,
+    messages: List[Dict[str, Any]],
+    effective_tools: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the request payload for debug print (truncate long content).
+    effective_tools = what is actually sent to the API ([] for LLM-only or Option A).
+    """
+    msg_copy: List[Dict[str, Any]] = []
+    for m in messages:
+        m = dict(m)
+        content = m.get("content")
+        if isinstance(content, str) and len(content) > _DEBUG_MAX_CONTENT_LEN:
+            m["content"] = content[:_DEBUG_MAX_CONTENT_LEN] + "\n\n... [truncated for debug]"
+        msg_copy.append(m)
+    payload: Dict[str, Any] = {"model": model_name, "messages": msg_copy}
+    payload["tools"] = effective_tools
+    if effective_tools:
+        payload["tool_choice"] = "auto"
+    return payload
 
 
 def _tool_call_to_dict(tool_call: Any) -> Dict[str, Any]:
@@ -286,10 +311,7 @@ async def cohort_chat(payload: CohortChatRequest):
             # Precomputed formatted context (e.g. from context cache)
             if entry["context_text"]:
                 block = f"Patient {pid}:\n{entry['context_text']}"
-                if payload.inject_tool_results and pid in tool_results_by_patient:
-                    tname, label = tool_results_by_patient[pid]
-                    if label is not None:
-                        block += f"\n\nThe {tname} tool was already called for this patient; result: {label}."
+                # Option A: tool result is injected via multi-turn dialog, not in user text
                 context_parts.append(block)
             continue
 
@@ -353,10 +375,7 @@ async def cohort_chat(payload: CohortChatRequest):
         )
         if context_text:
             block = f"Patient {pid}:\n{context_text}"
-            if payload.inject_tool_results and pid in tool_results_by_patient:
-                tname, label = tool_results_by_patient[pid]
-                if label is not None:
-                    block += f"\n\nThe {tname} tool was already called for this patient; result: {label}."
+            # Option A: tool result is injected via multi-turn dialog, not in user text
             context_parts.append(block)
 
     cohort_context_block = "\n\n".join(context_parts) if context_parts else "(No events in window.)"
@@ -373,16 +392,23 @@ async def cohort_chat(payload: CohortChatRequest):
             "For this task you must reply with ONLY a single word: either \"yes\" or \"no\". "
             "Do not include any reasoning, explanation, or discussion.\n\n"
         )
-    if payload.inject_tool_results and task_name and task_name in ALL_TASKS:
-        system_prompt += (
-            "The prediction tool has already been run for each patient; the results are included in each patient's block. "
-            "Use those results to answer. Do not call any prediction tool.\n\n"
-        )
-    system_prompt += (
-        "You have access to tools: a calculator (for any arithmetic) and "
-        "get_readmission_prediction (to look up predicted readmission for a patient in the cohort). "
-        "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
+    # Same tool line when the model has the task tool OR when Option A (synthetic tool call): payload must look like a real tool call.
+    show_task_tool_line = (
+        is_vista_task
+        and task_name
+        and task_name in ALL_TASKS
+        and (payload.use_tools or payload.inject_tool_results)
     )
+    if show_task_tool_line:
+        tool_def = get_task_tool_definition(task_name, payload.prediction_time)
+        tool_name = tool_def.get("function", {}).get("name", f"get_{task_name}_prediction")
+        system_prompt += (
+            f"You have access to the {tool_name} tool. Use it when appropriate to inform your answer.\n\n"
+        )
+    else:
+        system_prompt += (
+            "Answer based on the information in the conversation only. Do not use any tools.\n\n"
+        )
 
     # For Vista/EHRSHOT tasks: binary yes/no only; otherwise cohort summary.
     if is_vista_task:
@@ -408,50 +434,97 @@ async def cohort_chat(payload: CohortChatRequest):
         """
     )
 
-    if payload.debug:
-        print("\n" + "=" * 60 + " COHORT CHAT DEBUG: FULL CONTEXT (before LLM/tool call) " + "=" * 60)
-        print("--- COHORT CONTEXT BLOCK ---")
-        print(cohort_context_block)
-        print("--- FULL USER PROMPT ---")
-        print(user_prompt)
-        print("=" * 60 + " END DEBUG " + "=" * 60 + "\n")
-
     # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
     gen_cfg = get_default_generation_config(payload.generation_config)
 
-    # Vista tasks only: expose task-specific tool + calculator. When inject_tool_results, do not expose task tool (single-turn).
+    # Vista tasks only: expose task-specific tool only (no calculator for experiment). When inject_tool_results, do not expose task tool.
     if payload_task and payload_task in ALL_TASKS and not payload.inject_tool_results:
-        tools = [
-            get_task_tool_definition(payload_task, payload.prediction_time),
-            get_calculator_tool_definition(),
-        ]
+        tools = [get_task_tool_definition(payload_task, payload.prediction_time)]
     elif payload.inject_tool_results:
-        tools = [get_calculator_tool_definition()]
+        tools = []
     else:
         tools = []
     used_ids = [entry["patient_id"] for entry in cohort_context]
-
-    if payload.debug:
-        tool_names = [t.get("function", {}).get("name") for t in tools]
-        print(
-            f"[DEBUG tool calling] task_name={payload_task or '(none)'} | "
-            f"tools exposed={tool_names} | use_tools={payload.use_tools} (effective={payload.use_tools and len(tools) > 0})"
-        )
 
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
+    # Option A: when inject_tool_results, append synthetic assistant + tool messages (multi-turn dialog)
+    injected_tool_turn = False
+    if (
+        payload.inject_tool_results
+        and payload_task
+        and payload_task in ALL_TASKS
+        and tool_results_by_patient
+    ):
+        # One synthetic tool call per patient that has a result (cohort order)
+        patients_with_results: List[tuple] = []
+        for entry in cohort_context:
+            pid = entry["patient_id"]
+            if pid not in tool_results_by_patient:
+                continue
+            tname, label = tool_results_by_patient[pid]
+            if label is None:
+                continue
+            patients_with_results.append((pid, tname, label))
+        if patients_with_results:
+            tool_def = get_task_tool_definition(payload_task, payload.prediction_time)
+            tool_name = tool_def.get("function", {}).get("name", f"get_{payload_task}_prediction")
+            synthetic_tool_calls: List[Dict[str, Any]] = []
+            for i, (pid, _tname, _label) in enumerate(patients_with_results):
+                call_id = f"call_{i + 1:03d}"
+                args: Dict[str, Any] = {"person_id": pid}
+                if payload.prediction_time:
+                    args["prediction_time"] = payload.prediction_time
+                synthetic_tool_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": json.dumps(args)},
+                })
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": synthetic_tool_calls,
+            })
+            for i, (pid, _tname, label) in enumerate(patients_with_results):
+                call_id = f"call_{i + 1:03d}"
+                result = {"patient_id": pid, "label": label, "task": payload_task}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(result),
+                })
+            injected_tool_turn = True
+
     max_tool_iterations = 5
     response = None
-    use_tools = payload.use_tools and len(tools) > 0
+    use_tools = payload.use_tools and len(tools) > 0 and not injected_tool_turn
     tool_executions = 0
 
+    if payload.debug:
+        effective_tools = [] if injected_tool_turn else (tools if use_tools else [])
+        request_payload = _debug_request_payload(
+            model_name, messages, effective_tools
+        )
+        print("\n" + "FULL REQUEST PAYLOAD (debug):\n")
+        print(json.dumps(request_payload, indent=2, default=_json_default))
+        print()
+
     try:
-        if use_tools:
+        if injected_tool_turn:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **gen_cfg,
+            )
+            logger.info(
+                "Cohort chat: injected tool turn, single completion for final answer"
+            )
+        elif use_tools:
             try:
                 response = client.chat.completions.create(
                     model=model_name,

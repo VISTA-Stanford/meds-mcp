@@ -120,9 +120,9 @@ def main() -> None:
             context_parts.append(f"Patient {pid}:\n[No context in cache for key {key}]")
             continue
         raw_label = row.get(label_col) or row.get("label", "")
-        label = _label_to_yes_no(raw_label)
+        _label = _label_to_yes_no(raw_label)
         block = f"Patient {pid}:\n{context_text}"
-        block += f"\n\nThe {tool_name} tool was already called for this patient; result: {label}."
+        # Option A: tool result is in multi-turn dialog (assistant tool_calls + tool message), not in user text
         context_parts.append(block)
 
     cohort_block = "\n\n".join(context_parts)

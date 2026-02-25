@@ -293,6 +293,12 @@ async def _process_single_row(
     ground_truth_norm = ground_truth_to_normalized(ground_truth_raw, is_binary=True)
     row_key = (patient_id, task_name, prediction_time)
 
+    if debug:
+        print(
+            f"\n>>> Patient {patient_id} | task={task_name} | prediction_time={prediction_time} | "
+            "running LLM-only + LLM+tool (Option A). For clearer ordering use --batch-size 1 <<<"
+        )
+
     async with sem:
         result_llm, result_tool = await asyncio.gather(
             run_single_prediction(
