@@ -208,12 +208,23 @@ def main():
         if sub.height < 10:
             continue
         y_true = to_binary_series(sub["ground_truth_normalized"])
-        y_llm = to_binary_series(sub["llm_only_normalized"])
-        y_tool = to_binary_series(sub["llm_plus_tool_normalized"])
+        # Use continuous scores P(yes) when available for proper AUROC; else binary predictions
+        def score_or_binary(score_col: str, norm_col: str, y_true_arr: np.ndarray) -> tuple:
+            if score_col in sub.columns and sub[score_col].null_count() < sub.height:
+                s = sub[score_col].fill_null(np.nan).to_numpy()
+                mask = ~np.isnan(s)
+                if mask.sum() >= 10:
+                    return y_true_arr[mask], s[mask], True
+            return y_true_arr, to_binary_series(sub[norm_col]), False
+
+        y_true_llm, y_llm, _ = score_or_binary("llm_only_score", "llm_only_normalized", y_true)
+        y_true_tool, y_tool, _ = score_or_binary("llm_plus_tool_score", "llm_plus_tool_normalized", y_true)
+        if len(y_true_llm) < 10 or len(y_true_tool) < 10:
+            continue
 
         try:
-            auc_llm, lo_llm, hi_llm = bootstrap_auc(y_true, y_llm)
-            auc_tool, lo_tool, hi_tool = bootstrap_auc(y_true, y_tool)
+            auc_llm, lo_llm, hi_llm = bootstrap_auc(y_true_llm, y_llm)
+            auc_tool, lo_tool, hi_tool = bootstrap_auc(y_true_tool, y_tool)
             auroc_rows.append(
                 {
                     "task": task,

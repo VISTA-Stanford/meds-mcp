@@ -228,6 +228,7 @@ async def run_single_prediction(
         precomputed_context_text=pc_text,
         debug=debug,
         model=model,
+        return_logprobs=True,  # for AUROC: P(yes) from first-token logprobs
     )
     last_exc = None
     for attempt in range(max_retries + 1):
@@ -236,6 +237,7 @@ async def run_single_prediction(
             out = {
                 "answer": result.answer,
                 "tool_executions": getattr(result, "tool_executions", 0),
+                "score_positive": getattr(result, "score_positive", None),
             }
             if cache is not None:
                 cache[key] = out
@@ -288,7 +290,7 @@ async def _process_single_row(
 
     patient_id = row.get("patient_id")
     prediction_time = row.get("prediction_time")
-    ground_truth_raw = row.get("label", "")
+    ground_truth_raw = row.get("ground_truth") or row.get("label", "")
     # All tasks are binary (yes/no)
     ground_truth_norm = ground_truth_to_normalized(ground_truth_raw, is_binary=True)
     row_key = (patient_id, task_name, prediction_time)
@@ -317,6 +319,8 @@ async def _process_single_row(
     answer_llm = result_llm["answer"]
     answer_tool = result_tool["answer"]
     tool_executions = result_tool.get("tool_executions", 0)
+    score_llm = result_llm.get("score_positive")
+    score_tool = result_tool.get("score_positive")
 
     from meds_mcp.experiments.formatters import normalize_binary
     norm_llm = normalize_binary(answer_llm)
@@ -333,6 +337,8 @@ async def _process_single_row(
         "llm_plus_tool_raw": answer_tool,
         "llm_plus_tool_normalized": norm_tool,
         "tool_executions": tool_executions,
+        "llm_only_score": score_llm,
+        "llm_plus_tool_score": score_tool,
     }
     return (row_key, record)
 

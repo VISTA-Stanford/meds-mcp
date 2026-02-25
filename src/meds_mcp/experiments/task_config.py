@@ -26,6 +26,7 @@ BINARY_TASKS = [
     "lab_hypoglycemia",
     "lab_hyponatremia",
     "lab_thrombocytopenia",
+    "chexpert",
 ]
 
 CATEGORICAL_TASKS: List[str] = []  # Kept for backward compat; all tasks treated as binary
@@ -57,6 +58,7 @@ TASK_TO_FILENAME: Dict[str, str] = {
     "lab_hypoglycemia": "labels_lab_hypoglycemia.csv",
     "lab_hyponatremia": "labels_lab_hyponatremia.csv",
     "lab_thrombocytopenia": "labels_lab_thrombocytopenia.csv",
+    "chexpert": "labels_chexpert.csv",
 }
 
 # Task -> human-readable description for tool/system prompt (used in cohort_chat when task_name is set)
@@ -121,6 +123,48 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
         "This is a probabilistic model trained to predict hypoglycemia severity before the next glucose "
         "measurement. The assistant may use this tool if anticipating glucose abnormalities improves reasoning, but it is optional."
     ),
+    "chexpert": (
+        "This is a model trained to predict CheXpert (chest X-ray) findings. "
+        "The assistant may use this tool when imaging finding prediction would improve its answer."
+    ),
+}
+
+# Task -> one-sentence description of what the tool returns (for tool definition).
+TASK_TOOL_RETURNS: Dict[str, str] = {
+    "guo_icu": "whether the specified patient will require ICU admission within 24 hours of the provided prediction time",
+    "guo_los": "whether the specified patient will have a prolonged hospital length of stay (≥7 days) from admission",
+    "guo_readmission": "whether the specified patient will be rehospitalized within 30 days of discharge",
+    "new_hypertension": "whether the specified patient will receive a first-time diagnosis of hypertension within the 1-year period following the prediction time",
+    "new_hyperlipidemia": "whether the specified patient will receive a first-time diagnosis of hyperlipidemia within the 1-year period following the prediction time",
+    "new_pancan": "whether the specified patient will receive a first-time diagnosis of pancreatic cancer within the 1-year period following the prediction time",
+    "new_celiac": "whether the specified patient will receive a first-time diagnosis of celiac disease within the 1-year period following the prediction time",
+    "new_lupus": "whether the specified patient will receive a first-time diagnosis of lupus within the 1-year period following the prediction time",
+    "new_acutemi": "whether the specified patient will experience an acute myocardial infarction within the 1-year period following the prediction time",
+    "lab_thrombocytopenia": "whether the specified patient's next platelet count will be abnormal (prior to the next lab result)",
+    "lab_hyperkalemia": "whether the specified patient's next potassium level will be abnormal (prior to the next lab result)",
+    "lab_hypoglycemia": "whether the specified patient's next glucose level will be abnormal (prior to the next lab result)",
+    "lab_hyponatremia": "whether the specified patient's next sodium level will be abnormal (prior to the next lab result)",
+    "lab_anemia": "whether the specified patient's next hemoglobin level will be abnormal (prior to the next lab result)",
+    "chexpert": "whether the specified patient's chest imaging will show an abnormal finding",
+}
+
+# Task -> prediction target phrasing for user prompt (time horizon + target).
+TASK_PREDICTION_TARGET: Dict[str, str] = {
+    "guo_icu": "will require ICU admission within 24 hours of the prediction time",
+    "guo_los": "will have a prolonged hospital length of stay (≥7 days) from admission",
+    "guo_readmission": "will be rehospitalized within 30 days of discharge",
+    "new_hypertension": "will receive a first-time diagnosis of hypertension within the 1-year period following the prediction time",
+    "new_hyperlipidemia": "will receive a first-time diagnosis of hyperlipidemia within the 1-year period following the prediction time",
+    "new_pancan": "will receive a first-time diagnosis of pancreatic cancer within the 1-year period following the prediction time",
+    "new_celiac": "will receive a first-time diagnosis of celiac disease within the 1-year period following the prediction time",
+    "new_lupus": "will receive a first-time diagnosis of lupus within the 1-year period following the prediction time",
+    "new_acutemi": "will experience an acute myocardial infarction (heart attack) within the 1-year period following the prediction time",
+    "lab_thrombocytopenia": "will have an abnormal next platelet count (prior to the next lab result)",
+    "lab_hyperkalemia": "will have an abnormal next potassium level (prior to the next lab result)",
+    "lab_hypoglycemia": "will have an abnormal next glucose level (prior to the next lab result)",
+    "lab_hyponatremia": "will have an abnormal next sodium level (prior to the next lab result)",
+    "lab_anemia": "will have an abnormal next hemoglobin level (prior to the next lab result)",
+    "chexpert": "will have chest imaging showing an abnormal finding",
 }
 
 # Task -> question template (one patient). All questions are binary (yes/no).
@@ -139,6 +183,7 @@ TASK_QUESTIONS: Dict[str, str] = {
     "lab_hypoglycemia": "Based on this patient's metabolic status, is it likely their next glucose level will be abnormal?",
     "lab_hyponatremia": "Based on this patient's fluid and electrolyte balance, is it likely their next sodium level will be abnormal?",
     "lab_anemia": "Based on this patient's hematologic status, is it likely their next hemoglobin level will be abnormal?",
+    "chexpert": "Based on this patient's clinical data, is it likely their chest imaging will show an abnormal finding?",
 }
 
 

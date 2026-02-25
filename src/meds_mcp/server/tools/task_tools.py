@@ -67,7 +67,7 @@ async def get_task_prediction(
                     row_pt = _parse_prediction_time(row.get("prediction_time"))
                     if row_pt != pred_norm:
                         continue
-                raw_label = (row.get("label") or row.get("value") or "").strip().lower()
+                raw_label = (row.get("value") or row.get("label") or "").strip().lower()
                 label_str = "yes" if raw_label in ("true", "1", "yes") else "no"
                 return {
                     "patient_id": person_id,
@@ -92,35 +92,33 @@ def get_task_tool_definition(
     task_name: str,
     prediction_time: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """OpenAI-format tool definition for a task. Includes prediction_time when provided."""
-    from meds_mcp.experiments.task_config import TASK_DESCRIPTIONS
+    """OpenAI-format tool definition for a task. Clear description of what the tool returns and what inputs it requires."""
+    from meds_mcp.experiments.task_config import TASK_TOOL_RETURNS
 
-    desc = TASK_DESCRIPTIONS.get(task_name, task_name)
+    returns_phrase = TASK_TOOL_RETURNS.get(
+        task_name,
+        f"whether the specified patient has the outcome for task {task_name}",
+    )
     tool_name = f"get_{task_name}_prediction"
-    # Use a generic name that maps to our get_task_prediction dispatcher
-    props = {
-        "person_id": {
-            "type": "string",
-            "description": "Patient ID to look up.",
-        }
-    }
-    required = ["person_id"]
-    if prediction_time:
-        props["prediction_time"] = {
-            "type": "string",
-            "description": "Prediction time (ISO format) to match the specific task instance.",
-        }
-        required.append("prediction_time")
-
+    description = f"Returns a binary prediction indicating {returns_phrase}."
     return {
         "type": "function",
         "function": {
             "name": tool_name,
-            "description": f"Look up the {desc} for a patient from the labels dataset. Use this to inform your answer. The result is for support—you may use your own judgment after seeing it.",
+            "description": description,
             "parameters": {
                 "type": "object",
-                "properties": props,
-                "required": required,
+                "properties": {
+                    "person_id": {
+                        "type": "string",
+                        "description": "Unique identifier for the patient.",
+                    },
+                    "prediction_time": {
+                        "type": "string",
+                        "description": "Timestamp representing the time at which the prediction is made. Format: YYYY-MM-DD HH:MM",
+                    },
+                },
+                "required": ["person_id", "prediction_time"],
             },
         },
     }

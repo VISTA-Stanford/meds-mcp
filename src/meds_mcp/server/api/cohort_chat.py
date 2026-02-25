@@ -4,7 +4,8 @@ import json
 import datetime as dt
 import logging
 import textwrap
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
+import math
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -37,11 +38,13 @@ try:
     from meds_mcp.experiments.task_config import (
         ALL_TASKS,
         is_binary_task,
+        TASK_PREDICTION_TARGET,
     )
     from meds_mcp.experiments.formatters import RESPONSE_FORMAT_BINARY
 except Exception:
     ALL_TASKS = set()  # type: ignore[misc, assignment]
     is_binary_task = lambda _: False  # type: ignore[misc, assignment]
+    TASK_PREDICTION_TARGET = {}  # type: ignore[misc, assignment]
     RESPONSE_FORMAT_BINARY = "Answer with yes or no only. Do not include reasoning."
 
 # When debug=True, truncate message content beyond this for full-request JSON (readable stdout)
@@ -57,9 +60,11 @@ def _debug_request_payload(
     model_name: str,
     messages: List[Dict[str, Any]],
     effective_tools: List[Dict[str, Any]],
+    tool_choice_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the request payload for debug print (truncate long content).
-    effective_tools = what is actually sent to the API ([] for LLM-only or Option A).
+    effective_tools = what is actually sent to the API.
+    tool_choice_override: if set (e.g. 'none'), use instead of 'auto' when tools present.
     """
     msg_copy: List[Dict[str, Any]] = []
     for m in messages:
@@ -71,7 +76,7 @@ def _debug_request_payload(
     payload: Dict[str, Any] = {"model": model_name, "messages": msg_copy}
     payload["tools"] = effective_tools
     if effective_tools:
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice_override if tool_choice_override is not None else "auto"
     return payload
 
 
@@ -205,6 +210,70 @@ class CohortChatRequest(BaseModel):
         False,
         description="If true, print the full context (cohort block + user prompt) to stdout before the LLM/tool call.",
     )
+    return_logprobs: bool = Field(
+        False,
+        description="If True, request logprobs from the model and return score_positive (P(yes)) for AUROC. Requires the LLM backend (e.g. secure-llm / APIM) to support and return logprobs; otherwise score_positive will be null.",
+    )
+
+
+def _extract_score_positive_from_logprobs(response: Union[Dict[str, Any], Any]) -> Optional[float]:
+    """
+    Extract P(yes) from the first content token's logprobs (OpenAI-style).
+    Used for AUROC: score_positive is the continuous score for the positive class.
+    Returns None if logprobs not present or yes/no not found.
+    """
+    try:
+        if isinstance(response, dict):
+            choices = response.get("choices", [])
+        else:
+            choices = getattr(response, "choices", []) or []
+        if not choices:
+            return None
+        c0 = choices[0]
+        logprobs_obj = c0.get("logprobs") if isinstance(c0, dict) else getattr(c0, "logprobs", None)
+        if not logprobs_obj:
+            return None
+        content = logprobs_obj.get("content") if isinstance(logprobs_obj, dict) else getattr(logprobs_obj, "content", None)
+        if not content or not isinstance(content, list):
+            return None
+        # First token's top_logprobs (or the token itself)
+        first = content[0]
+        if isinstance(first, dict):
+            top = first.get("top_logprobs") or []
+            token_lp = first.get("logprob")
+            token_str = (first.get("token") or "").strip().lower()
+        else:
+            top = getattr(first, "top_logprobs", None) or []
+            token_lp = getattr(first, "logprob", None)
+            token_str = (getattr(first, "token", None) or "").strip().lower()
+        # Collect logprobs for yes/no (match normalized token)
+        lp_yes = lp_no = None
+        for t in top:
+            entry = t if isinstance(t, dict) else {}
+            tok = (entry.get("token") or getattr(t, "token", "") or "").strip().lower()
+            lp = entry.get("logprob") if isinstance(entry, dict) else getattr(t, "logprob", None)
+            if lp is None:
+                continue
+            if tok in ("yes", " yes", "yes."):
+                lp_yes = lp
+            elif tok in ("no", " no", "no."):
+                lp_no = lp
+        if token_lp is not None and lp_yes is None and token_str in ("yes", " yes", "yes."):
+            lp_yes = token_lp
+        if token_lp is not None and lp_no is None and token_str in ("no", " no", "no."):
+            lp_no = token_lp
+        if lp_yes is not None and lp_no is not None:
+            # P(yes) = exp(lp_yes) / (exp(lp_yes) + exp(lp_no))
+            e_yes = math.exp(lp_yes)
+            e_no = math.exp(lp_no)
+            return float(e_yes / (e_yes + e_no))
+        if lp_yes is not None:
+            return 1.0
+        if lp_no is not None:
+            return 0.0
+        return None
+    except Exception:
+        return None
 
 
 class CohortChatResponse(BaseModel):
@@ -212,6 +281,10 @@ class CohortChatResponse(BaseModel):
     used_patient_ids: List[str]
     num_events_used: int
     debug_context_size: int
+    score_positive: Optional[float] = Field(
+        default=None,
+        description="P(yes) from first-token logprobs when return_logprobs=True; use for AUROC.",
+    )
 
     # Evidence & event lookup for UI
     evidence_data: Dict[str, List[str]] = Field(
@@ -383,14 +456,20 @@ async def cohort_chat(payload: CohortChatRequest):
     task_name = payload_task
     is_vista_task = task_name and task_name in ALL_TASKS
 
-    system_prompt = (
-        "You are a clinical data analyst reviewing a cohort of patients. "
-        "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines).\n\n"
-    )
     if is_vista_task:
-        system_prompt += (
-            "For this task you must reply with ONLY a single word: either \"yes\" or \"no\". "
-            "Do not include any reasoning, explanation, or discussion.\n\n"
+        system_prompt = (
+            "You are an AI system performing binary clinical outcome prediction from structured patient data.\n\n"
+            "You will be asked to predict whether a specified clinical event occurs within a defined prediction window "
+            "based on a provided timeline of medical events.\n\n"
+            "Respond with exactly one word: yes or no.\n"
+            "Output must be lowercase.\n\n"
+            "Do not include explanations, reasoning, punctuation, or any additional text.\n"
+            "Base your answer only on the information provided in the conversation.\n\n"
+        )
+    else:
+        system_prompt = (
+            "You are a clinical data analyst reviewing a cohort of patients. "
+            "You will be given a list of patients with timeline events (delta-encoded: timestamp then code | name lines).\n\n"
         )
     # Same tool line when the model has the task tool OR when Option A (synthetic tool call): payload must look like a real tool call.
     show_task_tool_line = (
@@ -410,9 +489,30 @@ async def cohort_chat(payload: CohortChatRequest):
             "Answer based on the information in the conversation only. Do not use any tools.\n\n"
         )
 
-    # For Vista/EHRSHOT tasks: binary yes/no only; otherwise cohort summary.
+    # For Vista/EHRSHOT tasks: explicit task definition + timeline; otherwise cohort summary.
     if is_vista_task:
-        question_instruction = RESPONSE_FORMAT_BINARY
+        prediction_target = (
+            TASK_PREDICTION_TARGET.get(task_name, payload.question)
+            if task_name
+            else payload.question
+        )
+        pred_time_str = payload.prediction_time or "(not set)"
+        user_prompt = textwrap.dedent(
+            f"""
+            Prediction time: {pred_time_str}. Consider all events in the patient's medical timeline occurring on or before this time.
+
+            Predict whether the patient {prediction_target}.
+            """
+        )
+        if show_task_tool_line:
+            user_prompt += "\n\nYou may use available tools if helpful.\n\n"
+        user_prompt += textwrap.dedent(
+            f"""
+            Patient timeline (most recent 4096 tokens, strictly before prediction time):
+
+            {cohort_context_block}
+            """
+        )
     else:
         question_instruction = (
             "Please provide:\n"
@@ -420,30 +520,31 @@ async def cohort_chat(payload: CohortChatRequest):
             "- Any notable differences between them (if visible).\n"
             "- Brief mention of limitations (e.g., missing labs, limited time span) if relevant."
         )
+        user_prompt = textwrap.dedent(
+            f"""
+            Here is a cohort of patients with selected events (most recent 4096 tokens per patient, strictly before prediction_time when set):
 
-    user_prompt = textwrap.dedent(
-        f"""
-        Here is a cohort of patients with selected events (most recent 4096 tokens per patient, strictly before prediction_time when set):
+            {cohort_context_block}
 
-        {cohort_context_block}
+            QUESTION:
+            {payload.question}
 
-        QUESTION:
-        {payload.question}
-
-        {question_instruction}
-        """
-    )
+            {question_instruction}
+            """
+        )
 
     # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
     gen_cfg = get_default_generation_config(payload.generation_config)
+    if payload.return_logprobs:
+        gen_cfg["logprobs"] = True
+        gen_cfg["top_logprobs"] = 5
 
-    # Vista tasks only: expose task-specific tool only (no calculator for experiment). When inject_tool_results, do not expose task tool.
-    if payload_task and payload_task in ALL_TASKS and not payload.inject_tool_results:
+    # Vista tasks only: expose task-specific tool only (no calculator for experiment).
+    # For Option A (inject_tool_results) we still include the tool definition in the payload so the model sees name/description/parameters; we use tool_choice="none" so it does not call again.
+    if payload_task and payload_task in ALL_TASKS:
         tools = [get_task_tool_definition(payload_task, payload.prediction_time)]
-    elif payload.inject_tool_results:
-        tools = []
     else:
         tools = []
     used_ids = [entry["patient_id"] for entry in cohort_context]
@@ -502,13 +603,15 @@ async def cohort_chat(payload: CohortChatRequest):
 
     max_tool_iterations = 5
     response = None
+    score_positive: Optional[float] = None
     use_tools = payload.use_tools and len(tools) > 0 and not injected_tool_turn
     tool_executions = 0
 
     if payload.debug:
-        effective_tools = [] if injected_tool_turn else (tools if use_tools else [])
+        effective_tools = tools if (injected_tool_turn or use_tools) else []
+        tool_choice_debug = "none" if injected_tool_turn else None
         request_payload = _debug_request_payload(
-            model_name, messages, effective_tools
+            model_name, messages, effective_tools, tool_choice_override=tool_choice_debug
         )
         print("\n" + "FULL REQUEST PAYLOAD (debug):\n")
         print(json.dumps(request_payload, indent=2, default=_json_default))
@@ -519,6 +622,8 @@ async def cohort_chat(payload: CohortChatRequest):
             response = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
+                tools=tools,
+                tool_choice="none",
                 **gen_cfg,
             )
             logger.info(
@@ -644,6 +749,18 @@ async def cohort_chat(payload: CohortChatRequest):
             )
 
         answer_text = extract_response_content(response)
+        score_positive = _extract_score_positive_from_logprobs(response) if payload.return_logprobs and response else None
+        if payload.return_logprobs and score_positive is None and response is not None:
+            # Help debug: secure-llm or backend may not support/return logprobs
+            try:
+                c0 = response.get("choices", [{}])[0] if isinstance(response, dict) else getattr(response, "choices", [None])[0]
+                has_lp = c0 and (c0.get("logprobs") if isinstance(c0, dict) else getattr(c0, "logprobs", None))
+                logger.debug(
+                    "return_logprobs=True but score_positive is None (response has logprobs on choice: %s)",
+                    bool(has_lp),
+                )
+            except Exception:
+                pass
     except Exception as e:
         msg = str(e)
         logger.exception("LLM generation failed")
@@ -664,6 +781,7 @@ async def cohort_chat(payload: CohortChatRequest):
         used_patient_ids=used_ids,
         num_events_used=total_events,
         debug_context_size=len(cohort_context),
+        score_positive=score_positive,
         evidence_data=evidence_data,
         event_index=event_index,
         tool_executions=tool_executions,
