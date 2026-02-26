@@ -222,13 +222,11 @@ async def run_single_prediction(
         prediction_time=prediction_time,
         task_name=task_name,
         use_tools=use_tools,
-        inject_tool_results=False,  # real tool calls: model decides to call tool, gets result, then produces answer
         max_events_per_patient=500,
         precomputed_context=pc,
         precomputed_context_text=pc_text,
         debug=debug,
         model=model,
-        return_logprobs=True,  # for AUROC: P(yes) from first-token logprobs
     )
     last_exc = None
     for attempt in range(max_retries + 1):
@@ -237,7 +235,6 @@ async def run_single_prediction(
             out = {
                 "answer": result.answer,
                 "tool_executions": getattr(result, "tool_executions", 0),
-                "score_positive": getattr(result, "score_positive", None),
             }
             if cache is not None:
                 cache[key] = out
@@ -284,6 +281,7 @@ async def _process_single_row(
     precomputed_context_cache: Optional[dict] = None,
     debug: bool = False,
     model: Optional[str] = None,
+    tool_noise_level: Optional[float] = None,
 ) -> Tuple[Tuple[str, str, str], dict]:
     """Process one row: LLM-only + LLM+tool (in parallel). Returns (row_key, record)."""
     from meds_mcp.experiments.formatters import ground_truth_to_normalized
@@ -293,6 +291,9 @@ async def _process_single_row(
     ground_truth_raw = row.get("ground_truth") or row.get("label", "")
     # All tasks are binary (yes/no)
     ground_truth_norm = ground_truth_to_normalized(ground_truth_raw, is_binary=True)
+    # Tool output for this case (CSV "value" = possibly flipped; else "label")
+    tool_value_raw = row.get("value") or row.get("label", "")
+    tool_value_normalized = ground_truth_to_normalized(tool_value_raw, is_binary=True)
     row_key = (patient_id, task_name, prediction_time)
 
     if debug:
@@ -319,8 +320,6 @@ async def _process_single_row(
     answer_llm = result_llm["answer"]
     answer_tool = result_tool["answer"]
     tool_executions = result_tool.get("tool_executions", 0)
-    score_llm = result_llm.get("score_positive")
-    score_tool = result_tool.get("score_positive")
 
     from meds_mcp.experiments.formatters import normalize_binary
     norm_llm = normalize_binary(answer_llm)
@@ -336,9 +335,10 @@ async def _process_single_row(
         "llm_only_normalized": norm_llm,
         "llm_plus_tool_raw": answer_tool,
         "llm_plus_tool_normalized": norm_tool,
+        "tool_value_raw": tool_value_raw,
+        "tool_value_normalized": tool_value_normalized,
+        "tool_noise_level": tool_noise_level,
         "tool_executions": tool_executions,
-        "llm_only_score": score_llm,
-        "llm_plus_tool_score": score_tool,
     }
     return (row_key, record)
 
@@ -476,6 +476,7 @@ async def run_experiment_async(
                     precomputed_context_cache=precomputed_context_cache,
                     debug=getattr(args, "debug", False),
                     model=model_arg,
+                    tool_noise_level=getattr(args, "tool_noise_level", None),
                 )
                 if pbar:
                     pbar.update(1)
@@ -647,6 +648,13 @@ def main():
         type=str,
         default=None,
         help="LLM model name (e.g. apim:gpt-4.1-mini). If not set, uses server default.",
+    )
+    parser.add_argument(
+        "--tool-noise-level",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="Tool noise level for this run (e.g. 0, 0.25, 0.5, 1). Written to each record for analysis (e.g. quadrant/Sankey by noise).",
     )
     args = parser.parse_args()
 

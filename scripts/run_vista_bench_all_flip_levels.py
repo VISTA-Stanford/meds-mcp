@@ -32,6 +32,8 @@ FLIP_LEVELS = [
     ("50pct_flip", "labels_100_50pct_flip"), # 50% correct
     ("100pct_flip", "labels_100_100pct_flip"), # 0% correct
 ]
+# Numeric noise level for --tool-noise-level (for quadrant/Sankey analysis)
+FLIP_TO_NOISE_LEVEL = {"0pct_flip": 0.0, "25pct_flip": 0.25, "50pct_flip": 0.5, "100pct_flip": 1.0}
 
 
 def main():
@@ -121,6 +123,7 @@ def main():
             str(script),
             "--config", str(config_path),
             "--output-dir", str(out_dir),
+            "--tool-noise-level", str(FLIP_TO_NOISE_LEVEL[short_name]),
         ]
         if args.context_cache_path.strip():
             path = Path(args.context_cache_path.strip())
