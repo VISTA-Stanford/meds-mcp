@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_LABELS_DIR = _REPO_ROOT / "data" / "collections" / "vista_bench" / "labels"
+_LABELS_DIR = _REPO_ROOT / "data" / "collections" / "ehrshot" / "labels" / "labels_100_0pct_flip"
 
 # All tasks are binary (yes/no). Lab tasks are binarized to normal vs abnormal in label CSVs.
 BINARY_TASKS = [

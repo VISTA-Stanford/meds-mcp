@@ -222,7 +222,7 @@ async def run_single_prediction(
         prediction_time=prediction_time,
         task_name=task_name,
         use_tools=use_tools,
-        inject_tool_results=use_tools,  # single-turn: tool result in context, no tool call
+        inject_tool_results=False,  # real tool calls: model decides to call tool, gets result, then produces answer
         max_events_per_patient=500,
         precomputed_context=pc,
         precomputed_context_text=pc_text,

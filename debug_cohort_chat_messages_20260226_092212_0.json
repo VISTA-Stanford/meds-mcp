@@ -1,0 +1,31 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an AI system performing binary clinical outcome prediction from structured patient data.\n\nYou will be asked to predict whether a specified clinical event occurs within a defined prediction window based on a provided timeline of medical events.\n\nRespond with exactly one word: yes or no.\nOutput must be lowercase.\n\nDo not include explanations, reasoning, punctuation, or any additional text.\nBase your answer only on the information provided in the conversation.\n\nYou have access to the get_lab_thrombocytopenia_prediction tool. Use it when appropriate to inform your answer.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "\nPrediction time: 2003-10-03 13:59:00. Consider all events in the patient's medical timeline occurring on or before this time.\n\nPredict whether the patient will have an abnormal next platelet count (prior to the next lab result).\n\n\nYou may use available tools if helpful.\n\n\n            Patient timeline (most recent 4096 tokens, strictly before prediction time):\n\n            Patient 115970196:\n2003-09-18\nMedicare Specialty/A0 | Hospital | start|end\n"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_001",
+          "type": "function",
+          "function": {
+            "name": "get_lab_thrombocytopenia_prediction",
+            "arguments": "{\"person_id\": \"115970196\", \"prediction_time\": \"2003-10-03 13:59:00\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_001",
+      "content": "{\"patient_id\": \"115970196\", \"label\": \"no\", \"task\": \"lab_thrombocytopenia\"}"
+    }
+  ]
+}

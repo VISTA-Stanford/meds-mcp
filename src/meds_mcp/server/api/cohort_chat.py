@@ -606,15 +606,24 @@ async def cohort_chat(payload: CohortChatRequest):
     score_positive: Optional[float] = None
     use_tools = payload.use_tools and len(tools) > 0 and not injected_tool_turn
     tool_executions = 0
+    # Force the first completion to call the task tool (not "auto"); after tool result we use "none" so model gives final answer
+    forced_tool_choice: Optional[Dict[str, Any]] = None
+    if use_tools and tools:
+        tool_name = tools[0].get("function", {}).get("name", f"get_{payload_task}_prediction")
+        forced_tool_choice = {"type": "function", "function": {"name": tool_name}}
 
     if payload.debug:
         effective_tools = tools if (injected_tool_turn or use_tools) else []
-        tool_choice_debug = "none" if injected_tool_turn else None
+        tool_choice_debug = "none" if injected_tool_turn else (forced_tool_choice if use_tools else None)
+        print("\n" + "=== DEBUG: TOOLS (definition) ===\n")
+        print(json.dumps(tools, indent=2, default=_json_default))
+        print("\n" + "=== DEBUG: FULL REQUEST PAYLOAD (messages truncated for readability) ===\n")
         request_payload = _debug_request_payload(
             model_name, messages, effective_tools, tool_choice_override=tool_choice_debug
         )
-        print("\n" + "FULL REQUEST PAYLOAD (debug):\n")
         print(json.dumps(request_payload, indent=2, default=_json_default))
+        print("\n" + "=== DEBUG: FULL MESSAGES (complete, untruncated) ===\n")
+        print(json.dumps({"messages": messages}, indent=2, default=_json_default))
         print()
 
     try:
@@ -635,11 +644,11 @@ async def cohort_chat(payload: CohortChatRequest):
                     model=model_name,
                     messages=messages,
                     tools=tools,
-                    tool_choice="auto",
+                    tool_choice=forced_tool_choice,  # force LLM to call the task tool
                     **gen_cfg,
                 )
                 logger.info(
-                    "Cohort chat: request sent with tools=%s",
+                    "Cohort chat: request sent with tools=%s (tool_choice=forced)",
                     [t.get("function", {}).get("name") for t in tools],
                 )
             except (TypeError, ValueError, Exception) as tools_err:
@@ -679,6 +688,12 @@ async def cohort_chat(payload: CohortChatRequest):
                 message = choices[0].get("message", {})
             else:
                 message = getattr(choices[0], "message", {})
+
+            if payload.debug:
+                msg_debug = message if isinstance(message, dict) else {"content": getattr(message, "content", None), "tool_calls": getattr(message, "tool_calls", None)}
+                print("\n" + f"=== DEBUG: ASSISTANT RESPONSE (iteration {iteration}) ===\n")
+                print(json.dumps(msg_debug, indent=2, default=_json_default))
+                print()
 
             tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
             if not tool_calls:
@@ -733,6 +748,10 @@ async def cohort_chat(payload: CohortChatRequest):
                     task_name=payload.task_name,
                     prediction_time=payload.prediction_time,
                 )
+                if payload.debug:
+                    print("\n" + "=== DEBUG: TOOL RESULT ===\n")
+                    print(result if isinstance(result, str) else json.dumps(result, indent=2, default=_json_default))
+                    print()
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_dict.get("id", ""),
@@ -740,15 +759,23 @@ async def cohort_chat(payload: CohortChatRequest):
                 })
 
             iteration += 1
+            if payload.debug:
+                print("\n" + f"=== DEBUG: FULL MESSAGES before next create (iteration {iteration}) ===\n")
+                print(json.dumps({"messages": messages}, indent=2, default=_json_default))
+                print()
             response = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
                 tools=tools,
-                tool_choice="auto",
+                tool_choice="none",  # after tool result: force final answer only (no second tool call)
                 **gen_cfg,
             )
 
         answer_text = extract_response_content(response)
+        if payload.debug:
+            print("\n" + "=== DEBUG: LLM ANSWER (final) ===\n")
+            print(answer_text or "(empty)")
+            print()
         score_positive = _extract_score_positive_from_logprobs(response) if payload.return_logprobs and response else None
         if payload.return_logprobs and score_positive is None and response is not None:
             # Help debug: secure-llm or backend may not support/return logprobs

@@ -49,8 +49,6 @@ async def get_task_prediction(
             "patient_id": person_id,
             "label": None,
         }
-    pred_norm = _parse_prediction_time(prediction_time) if prediction_time else None
-
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
@@ -63,10 +61,6 @@ async def get_task_prediction(
             for row in reader:
                 if row.get("patient_id") != person_id:
                     continue
-                if pred_norm:
-                    row_pt = _parse_prediction_time(row.get("prediction_time"))
-                    if row_pt != pred_norm:
-                        continue
                 raw_label = (row.get("value") or row.get("label") or "").strip().lower()
                 label_str = "yes" if raw_label in ("true", "1", "yes") else "no"
                 return {

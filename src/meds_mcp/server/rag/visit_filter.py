@@ -1,6 +1,6 @@
 """
-Direct XML parsing to restrict patient context to a single encounter (visit).
-Used by cohort_chat when prediction_time is set—single-visit filtering is the default.
+Direct XML parsing for patient events: single-visit (one encounter) or full history.
+Used by cohort_chat when prediction_time is set.
 """
 
 from pathlib import Path
@@ -116,3 +116,59 @@ def get_events_for_single_visit_from_xml(
                 best_max_ts = encounter_max_ts
 
     return best_encounter_events
+
+
+def get_all_events_before_prediction_time_from_xml(
+    person_id: str,
+    prediction_time_str: str,
+    data_dir: str,
+) -> List[Dict[str, Any]]:
+    """
+    Parse patient XML and return all events from all encounters with timestamp
+    strictly before prediction_time. Events are sorted by timestamp ascending.
+    Context is then truncated to last 4096 tokens by format_patient_context.
+    """
+    data_path = Path(data_dir)
+    xml_path = data_path / f"{person_id}.xml"
+    if not xml_path.exists():
+        return []
+
+    cutoff = _parse_timestamp(prediction_time_str)
+    if cutoff is None:
+        return []
+
+    try:
+        root = etree.parse(str(xml_path)).getroot()
+    except etree.XMLSyntaxError as e:
+        print(f"XML is empty or invalid for patient {person_id} ({xml_path}): {e}.")
+        return []
+
+    all_events: List[Dict[str, Any]] = []
+
+    for enc_idx, encounter in enumerate(root.findall("encounter")):
+        events_elem = encounter.find("events")
+        if events_elem is None:
+            continue
+
+        for ent_idx, entry in enumerate(events_elem.findall("entry")):
+            entry_ts_str = entry.get("timestamp")
+            entry_ts = _parse_timestamp(entry_ts_str)
+
+            if entry_ts is None or entry_ts >= cutoff:
+                continue
+
+            for ev_idx, event in enumerate(entry.findall("event")):
+                ev_dict = _event_elem_to_dict(
+                    event, entry_ts_str, person_id, enc_idx, ent_idx, ev_idx
+                )
+                all_events.append(ev_dict)
+
+    # Sort by timestamp (and event_id for stability)
+    def _sort_key(ev: Dict[str, Any]) -> tuple:
+        ts = _parse_timestamp(ev.get("timestamp") or ev.get("event_time"))
+        if ts is None:
+            ts = datetime.min
+        return (ts, ev.get("event_id") or ev.get("id") or "")
+
+    all_events.sort(key=_sort_key)
+    return all_events

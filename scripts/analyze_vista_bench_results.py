@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 Analyze vista_bench experiment results: LLM vs LLM+tool.
-Produces AUROC tables, CIs, disagreement plots, and comparison visualizations.
+Produces balanced accuracy comparison and LLM vs tool disagreement (how often
+the LLM final answer differs from the tool/ground-truth label).
 
 Requirements: polars, scikit-learn, matplotlib, seaborn.
 """
 
 import argparse
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -22,6 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
 from meds_mcp.experiments.task_config import (
     ALL_TASKS,
     BINARY_TASKS,
+    TASK_TO_FILENAME,
     get_csv_path_for_task,
     get_labels_dir,
     is_binary_task,
@@ -33,6 +36,58 @@ EXCLUDED_TASKS: set = set()
 # For class balance: population (500) vs subset (100)
 POPULATION_SIZE = 500
 SUBSET_SIZE = 100
+
+
+def _value_to_yes_no(raw: str) -> str:
+    """Normalize CSV 'value' column (true/false/1/0) to yes/no for comparison with LLM output."""
+    if raw is None or not str(raw).strip():
+        return None
+    lower = str(raw).strip().lower()
+    if lower in ("true", "1", "yes"):
+        return "yes"
+    if lower in ("false", "0", "no"):
+        return "no"
+    return None
+
+
+def load_tool_value_lookup(labels_dir: Path, task_names: list) -> pl.DataFrame:
+    """Load CSV 'value' column per (patient_id, prediction_time, task_name) and normalize to yes/no.
+    Used for LLM vs tool disagreement: compare LLM+tool output to what the tool (value) returned.
+    """
+    rows = []
+    for task in task_names:
+        if task not in TASK_TO_FILENAME:
+            continue
+        csv_path = labels_dir / TASK_TO_FILENAME[task]
+        if not csv_path.exists():
+            continue
+        try:
+            tbl = pl.read_csv(csv_path)
+        except Exception:
+            continue
+        if "value" not in tbl.columns or "patient_id" not in tbl.columns:
+            continue
+        pred_col = "prediction_time" if "prediction_time" in tbl.columns else None
+        if not pred_col:
+            continue
+        val_lower = pl.col("value").str.to_lowercase().str.strip_chars()
+        tool_val = (
+            pl.when(val_lower.is_in(["true", "1", "yes"]))
+            .then(pl.lit("yes"))
+            .when(val_lower.is_in(["false", "0", "no"]))
+            .then(pl.lit("no"))
+            .otherwise(pl.lit(None))
+        )
+        tbl = tbl.select(
+            pl.col("patient_id").cast(pl.Utf8),
+            pl.col(pred_col).cast(pl.Utf8).alias("prediction_time"),
+            pl.lit(task).alias("task_name"),
+            tool_val.alias("tool_value_normalized"),
+        )
+        rows.append(tbl)
+    if not rows:
+        return pl.DataFrame(schema={"patient_id": pl.Utf8, "prediction_time": pl.Utf8, "task_name": pl.Utf8, "tool_value_normalized": pl.Utf8})
+    return pl.concat(rows)
 
 
 def load_results(jsonl_path: Path) -> pl.DataFrame:
@@ -125,6 +180,12 @@ def main():
         default="results/analysis",
         help="Output directory for plots and tables",
     )
+    parser.add_argument(
+        "--labels-dir",
+        type=Path,
+        default=None,
+        help="Labels dir for task CSVs (value column); used for LLM vs tool disagreement. Default: VISTA_LABELS_DIR or repo default.",
+    )
     args = parser.parse_args()
 
     print("=== analyze_vista_bench_results ===")
@@ -137,6 +198,18 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"  Output dir: {out_dir}")
 
+    # Option 2: load CSV 'value' (tool output) for LLM vs tool disagreement
+    if args.labels_dir is not None:
+        os.environ["VISTA_LABELS_DIR"] = str(args.labels_dir)
+    labels_dir = args.labels_dir if args.labels_dir is not None else get_labels_dir()
+    value_lookup = load_tool_value_lookup(labels_dir, df["task_name"].unique().to_list())
+    df = df.with_columns(
+        pl.col("patient_id").cast(pl.Utf8),
+        pl.col("prediction_time").cast(pl.Utf8),
+    ).join(value_lookup, on=["patient_id", "prediction_time", "task_name"], how="left")
+    n_with_tool_value = df.filter(pl.col("tool_value_normalized").is_not_null()).height
+    print(f"  Tool value lookup: {n_with_tool_value} rows with value from CSVs (labels_dir={labels_dir})")
+
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns  # noqa: F401
@@ -146,179 +219,51 @@ def main():
         HAS_PLOT = False
         print("matplotlib not available; skipping plots")
 
+    # LLM vs tool disagree = final answer differs from CSV 'value' (what the tool returns), only where value present
+    llm_vs_tool_disagree = (pl.col("llm_plus_tool_normalized") != pl.col("tool_value_normalized")) & pl.col("tool_value_normalized").is_not_null()
     df = df.with_columns(
         (pl.col("llm_only_normalized") == pl.col("llm_plus_tool_normalized")).alias("agree"),
         (pl.col("llm_only_normalized") == pl.col("ground_truth_normalized")).alias("llm_correct"),
         (pl.col("llm_plus_tool_normalized") == pl.col("ground_truth_normalized")).alias("tool_correct"),
+        llm_vs_tool_disagree.alias("llm_vs_tool_disagree"),
     )
     df = df.filter(~pl.col("task_name").is_in(list(EXCLUDED_TASKS)))
     disagree = df.filter(~pl.col("agree"))
 
-    # --- 0b. Class balance per task (population 500 vs subset 100) ---
-    print("\n0b. Class balance per task (population vs subset)...")
-    balance_table_rows = []
-    for task_name in ALL_TASKS:
-        if task_name in EXCLUDED_TASKS:
-            continue
-        task_df = load_task_labels_for_balance(task_name)
-        if task_df is None:
-            continue
-        pop = task_df.head(POPULATION_SIZE)
-        sub = task_df.head(SUBSET_SIZE)
-        bal_pop = compute_class_balance(pop, task_name)
-        bal_sub = compute_class_balance(sub, task_name)
-        if not bal_pop:
-            continue
-        task_type = "binary" if ("positive" in bal_pop) else "categorical"
-        row = {"task": task_name, "task_type": task_type}
-        if "positive" in bal_pop:
-            n_pos_p, n_neg_p = bal_pop.get("positive", 0), bal_pop.get("negative", 0)
-            n_pos_s, n_neg_s = bal_sub.get("positive", 0), bal_sub.get("negative", 0)
-            tot_p = n_pos_p + n_neg_p
-            tot_s = n_pos_s + n_neg_s
-            row["pct_positive_population"] = round(100 * n_pos_p / tot_p, 2) if tot_p else ""
-            row["pct_positive_subset"] = round(100 * n_pos_s / tot_s, 2) if tot_s else ""
-            row["ratio_population"] = ""
-            row["ratio_subset"] = ""
-        else:
-            cats = ["normal", "mild", "moderate", "severe"]
-            row["pct_positive_population"] = ""
-            row["pct_positive_subset"] = ""
-            row["ratio_population"] = ":".join(str(bal_pop.get(c, 0)) for c in cats)
-            row["ratio_subset"] = ":".join(str(bal_sub.get(c, 0)) for c in cats)
-        balance_table_rows.append(row)
-    if balance_table_rows:
-        balance_df = pl.DataFrame(balance_table_rows)
-        balance_df.write_csv(out_dir / "class_balance_by_task.csv")
-        print("0b. Class balance table saved to", out_dir / "class_balance_by_task.csv")
-
-    # --- 1. AUROC table with CIs (binary tasks) ---
-    print("\n1. Computing AUROC with bootstrap CIs (binary tasks)...")
-    tasks_in_results = df["task_name"].unique().to_list()
-    binary_tasks = [
-        t for t in tasks_in_results
-        if t not in EXCLUDED_TASKS and t in BINARY_TASKS
-    ]
-    auroc_rows = []
-    for i, task in enumerate(binary_tasks):
-        print(f"   AUROC task {i+1}/{len(binary_tasks)}: {task}")
-        sub = df.filter(pl.col("task_name") == task).drop_nulls(
-            subset=["ground_truth_normalized", "llm_only_normalized", "llm_plus_tool_normalized"]
-        )
-        if sub.height < 10:
-            continue
-        y_true = to_binary_series(sub["ground_truth_normalized"])
-        # Use continuous scores P(yes) when available for proper AUROC; else binary predictions
-        def score_or_binary(score_col: str, norm_col: str, y_true_arr: np.ndarray) -> tuple:
-            if score_col in sub.columns and sub[score_col].null_count() < sub.height:
-                s = sub[score_col].fill_null(np.nan).to_numpy()
-                mask = ~np.isnan(s)
-                if mask.sum() >= 10:
-                    return y_true_arr[mask], s[mask], True
-            return y_true_arr, to_binary_series(sub[norm_col]), False
-
-        y_true_llm, y_llm, _ = score_or_binary("llm_only_score", "llm_only_normalized", y_true)
-        y_true_tool, y_tool, _ = score_or_binary("llm_plus_tool_score", "llm_plus_tool_normalized", y_true)
-        if len(y_true_llm) < 10 or len(y_true_tool) < 10:
-            continue
-
-        try:
-            auc_llm, lo_llm, hi_llm = bootstrap_auc(y_true_llm, y_llm)
-            auc_tool, lo_tool, hi_tool = bootstrap_auc(y_true_tool, y_tool)
-            auroc_rows.append(
-                {
-                    "task": task,
-                    "auroc_llm": round(auc_llm, 4),
-                    "ci_llm": f"[{lo_llm:.3f}, {hi_llm:.3f}]",
-                    "auroc_llm_tool": round(auc_tool, 4),
-                    "ci_tool": f"[{lo_tool:.3f}, {hi_tool:.3f}]",
-                    "n": sub.height,
-                }
-            )
-        except Exception as e:
-            auroc_rows.append({"task": task, "error": str(e), "n": len(sub)})
-
-    auroc_df = pl.DataFrame(auroc_rows)
-    if auroc_df.height > 0:
-        auroc_df.write_csv(out_dir / "auroc_by_task.csv")
-        print("1. AUROC table saved to", out_dir / "auroc_by_task.csv")
-
-    # --- 2. Bar plot: AUROC LLM vs LLM+tool ---
-    print("\n2. Plotting AUROC comparison...")
-    if HAS_PLOT and auroc_df.height > 0 and "auroc_llm" in auroc_df.columns:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        x = np.arange(auroc_df.height)
-        w = 0.35
-        ax.bar(x - w / 2, auroc_df["auroc_llm"].to_list(), w, label="LLM only", color="steelblue")
-        ax.bar(x + w / 2, auroc_df["auroc_llm_tool"].to_list(), w, label="LLM+tool", color="coral")
-        ax.set_xticks(x)
-        ax.set_xticklabels(auroc_df["task"].to_list(), rotation=45, ha="right")
-        ax.set_ylabel("AUROC")
-        ax.legend()
-        ax.set_title("AUROC: LLM vs LLM+tool (binary tasks)")
-        plt.tight_layout()
-        plt.savefig(out_dir / "auroc_comparison.png", dpi=150, bbox_inches="tight")
-        plt.close()
-        print("2. AUROC bar plot saved to", out_dir / "auroc_comparison.png")
-
-    # --- 4. Agreement vs disagreement per task ---
-    print("\n4. Agreement vs disagreement per task...")
-    agree_counts = (
+    # --- 1. LLM final answer vs tool call: disagreements per task (vs CSV 'value') ---
+    print("\n1. LLM vs tool disagreement (LLM+tool output != CSV value / tool return)...")
+    llm_vs_tool = (
         df.group_by("task_name")
         .agg(
-            pl.col("agree").sum().alias("agree"),
-            pl.col("agree").count().alias("total"),
+            pl.col("llm_vs_tool_disagree").sum().alias("disagree_count"),
+            pl.col("tool_value_normalized").is_not_null().sum().alias("with_tool_value"),
         )
-        .with_columns((pl.col("total") - pl.col("agree")).alias("disagree"))
+        .with_columns(
+            pl.when(pl.col("with_tool_value") > 0)
+            .then(100.0 * pl.col("disagree_count") / pl.col("with_tool_value"))
+            .otherwise(None)
+            .round(2)
+            .alias("disagree_pct")
+        )
     )
-    agree_counts.write_csv(out_dir / "agreement_by_task.csv")
-
-    if HAS_PLOT:
+    llm_vs_tool.write_csv(out_dir / "llm_vs_tool_disagreement_by_task.csv")
+    total_disagree = int(df["llm_vs_tool_disagree"].sum())
+    print(f"   Total rows where LLM final answer != tool (CSV value): {total_disagree} / {n_with_tool_value} (rows with tool value)")
+    if HAS_PLOT and llm_vs_tool.height > 0:
         fig, ax = plt.subplots(figsize=(10, 5))
-        x = np.arange(agree_counts.height)
-        w = 0.4
-        ax.bar(x - w / 2, agree_counts["agree"].to_list(), w, label="Agree", color="steelblue")
-        ax.bar(x + w / 2, agree_counts["disagree"].to_list(), w, label="Disagree", color="coral")
+        x = np.arange(llm_vs_tool.height)
+        ax.bar(x, llm_vs_tool["disagree_count"].to_list(), color="coral", alpha=0.8)
         ax.set_xticks(x)
-        ax.set_xticklabels(agree_counts["task_name"].to_list(), rotation=45, ha="right")
+        ax.set_xticklabels(llm_vs_tool["task_name"].to_list(), rotation=45, ha="right")
         ax.set_ylabel("Count")
-        ax.legend()
-        ax.set_title("Agreement vs Disagreement: LLM vs LLM+tool")
+        ax.set_title("LLM final answer disagrees with tool call (per task)")
         plt.tight_layout()
-        plt.savefig(out_dir / "agreement_disagreement.png", dpi=150, bbox_inches="tight")
+        plt.savefig(out_dir / "llm_vs_tool_disagreement.png", dpi=150, bbox_inches="tight")
         plt.close()
-        print("4. Agreement/disagreement plot saved to", out_dir / "agreement_disagreement.png")
+        print("1. LLM vs tool disagreement plot saved to", out_dir / "llm_vs_tool_disagreement.png")
 
-    # --- 5a. Accuracy comparison ---
-    print("\n5a. Accuracy comparison...")
-    acc_rows = []
-    for task in df["task_name"].unique().to_list():
-        sub = df.filter(pl.col("task_name") == task)
-        acc_llm = (sub["llm_only_normalized"] == sub["ground_truth_normalized"]).mean()
-        acc_tool = (sub["llm_plus_tool_normalized"] == sub["ground_truth_normalized"]).mean()
-        acc_llm = acc_llm if acc_llm is not None else 0.0
-        acc_tool = acc_tool if acc_tool is not None else 0.0
-        acc_rows.append({"task": task, "acc_llm": acc_llm, "acc_tool": acc_tool, "n": sub.height})
-    acc_df = pl.DataFrame(acc_rows)
-    acc_df.write_csv(out_dir / "accuracy_by_task.csv")
-    if HAS_PLOT:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        x = np.arange(acc_df.height)
-        w = 0.35
-        ax.bar(x - w / 2, acc_df["acc_llm"].to_list(), w, label="LLM only", color="steelblue")
-        ax.bar(x + w / 2, acc_df["acc_tool"].to_list(), w, label="LLM+tool", color="coral")
-        ax.set_xticks(x)
-        ax.set_xticklabels(acc_df["task"].to_list(), rotation=45, ha="right")
-        ax.set_ylabel("Accuracy")
-        ax.legend()
-        ax.set_title("Accuracy: LLM vs LLM+tool")
-        plt.tight_layout()
-        plt.savefig(out_dir / "accuracy_comparison.png", dpi=150, bbox_inches="tight")
-        plt.close()
-        print("5a. Accuracy plot saved to", out_dir / "accuracy_comparison.png")
-
-    # --- 5a2. Balanced accuracy (LLM vs LLM+tool) ---
-    print("\n5a2. Balanced accuracy...")
+    # --- 2. Balanced accuracy (LLM vs LLM+tool) ---
+    print("\n2. Balanced accuracy...")
     from sklearn.metrics import balanced_accuracy_score
 
     bal_acc_rows = []
@@ -370,43 +315,16 @@ def main():
             plt.tight_layout()
             plt.savefig(out_dir / "balanced_accuracy_comparison.png", dpi=150, bbox_inches="tight")
             plt.close()
-        print("5a2. Balanced accuracy saved to", out_dir / "balanced_accuracy_by_task.csv")
+        print("2. Balanced accuracy saved to", out_dir / "balanced_accuracy_by_task.csv")
 
-    # --- 5b. Tool executed / tool exposed (% of cases where tool was used) ---
-    print("\n5b. Tool executed vs tool exposed...")
-    if "tool_executions" in df.columns and HAS_PLOT:
-        tool_pct = (
-            df.group_by("task_name")
-            .agg(
-                pl.len().alias("exposed"),
-                (pl.col("tool_executions") > 0).sum().alias("executed"),
-            )
-            .with_columns((100 * pl.col("executed") / pl.col("exposed")).round(1).alias("pct_executed"))
-            .sort("task_name")
-        )
-        if tool_pct.height > 0:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            x = np.arange(tool_pct.height)
-            ax.bar(x, tool_pct["pct_executed"].to_list(), color="steelblue", alpha=0.8)
-            ax.set_xticks(x)
-            ax.set_xticklabels(tool_pct["task_name"].to_list(), rotation=45, ha="right")
-            ax.set_ylabel("% tool executed / tool exposed")
-            ax.set_title("Percentage of cases where tool was executed (given tool exposed)")
-            plt.tight_layout()
-            plt.savefig(out_dir / "tool_executed_vs_exposed.png", dpi=150, bbox_inches="tight")
-            plt.close()
-            print("5b. Tool executed vs exposed saved to", out_dir / "tool_executed_vs_exposed.png")
-
-    # --- 5c. Summary ---
-    print("\n5c. Writing summary...")
+    # --- 3. Summary ---
+    print("\n3. Writing summary...")
+    n_disagree = int(df["llm_vs_tool_disagree"].sum())
     summary = {
         "total_rows": df.height,
-        "agreed": int(df["agree"].sum()),
-        "disagreed": int((~df["agree"]).sum()),
-        "both_correct": int((df["llm_correct"] & df["tool_correct"]).sum()),
-        "llm_only_correct": int((df["llm_correct"] & ~df["tool_correct"]).sum()),
-        "tool_only_correct": int((df["tool_correct"] & ~df["llm_correct"]).sum()),
-        "both_wrong": int((~df["llm_correct"] & ~df["tool_correct"]).sum()),
+        "rows_with_tool_value": n_with_tool_value,
+        "llm_vs_tool_disagree_count": n_disagree,
+        "llm_vs_tool_disagree_pct": round(100.0 * n_disagree / n_with_tool_value, 2) if n_with_tool_value else 0,
     }
     with open(out_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)

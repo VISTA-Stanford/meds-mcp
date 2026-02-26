@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-Precompute formatted context (delta-encoded, 4096 tokens, lab-aware) for each
+Precompute formatted context (delta-encoded, last 4096 tokens, lab-aware) for each
 (patient_id, prediction_time, task_name) in the task label CSVs.
+
+Uses full patient history: all events before prediction_time (no single-visit
+restriction). format_patient_context truncates to the last 4096 tokens.
 
 Output: context_cache.json
   Keys: "patient_id|prediction_time|task_name"
   Values: formatted context string (same format as cohort_chat uses)
 
-Uses single-visit events: either from --events-cache (single_visit_events_cache.json)
-or by parsing XML (requires --config with corpus_dir).
+When run without --events-cache: loads all events before prediction_time from XML
+per patient, then formats and truncates to 4096 tokens.
+When run with --events-cache: uses that cache (key pid|pt -> events); if the cache
+was built with full history you get full-history context.
 
 Usage:
-  # From existing events cache (fast; run precompute_single_visit_events.py first)
-  python scripts/precompute_context_cache.py --events-cache results/single_visit_events_cache.json --output-dir results
-
-  # From XML (no events cache)
+  # From XML (full history, last 4096 tokens)
   python scripts/precompute_context_cache.py --config configs/vista.yaml --output-dir results
+
+  # From existing events cache (events must be keyed pid|pt; full history if cache was built that way)
+  python scripts/precompute_context_cache.py --events-cache results/events_cache.json --output-dir results
 
   python scripts/precompute_context_cache.py --config configs/vista.yaml --task guo_readmission --limit 10
 """
@@ -45,7 +50,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     parser = argparse.ArgumentParser(
-        description="Precompute formatted context (delta-encoded, 4096 tokens) per (patient_id, prediction_time, task_name)",
+        description="Precompute formatted context (full history, last 4096 tokens) per (patient_id, prediction_time, task_name)",
     )
     parser.add_argument(
         "--config",
@@ -57,7 +62,7 @@ def main():
         "--events-cache",
         type=str,
         default=None,
-        help="Path to single_visit_events_cache.json; when set, events are loaded from here instead of XML",
+        help="Path to events cache (key pid|pt -> list of events); when set, events are loaded from here instead of XML",
     )
     parser.add_argument(
         "--task",
@@ -112,7 +117,7 @@ def main():
             events_cache = json.load(f)
         logging.info(f"Loaded {len(events_cache)} event lists from {args.events_cache}")
 
-    # When not using events cache, we need XML path for get_events_for_single_visit_from_xml
+    # When not using events cache, load full history from XML (all events before prediction_time)
     data_path = None
     if not events_cache:
         data_dir = config.get("data", {}).get("corpus_dir") or os.getenv(
@@ -122,7 +127,7 @@ def main():
         if not data_path.exists():
             logging.error(f"Corpus directory not found: {data_dir}. Use --events-cache or fix config.")
             sys.exit(1)
-        from meds_mcp.server.rag.visit_filter import get_events_for_single_visit_from_xml
+        from meds_mcp.server.rag.visit_filter import get_all_events_before_prediction_time_from_xml
 
     context_cache: dict[str, str] = {}
 
@@ -154,7 +159,7 @@ def main():
                     if events is None:
                         continue
                 else:
-                    events = get_events_for_single_visit_from_xml(pid, pt, str(data_path))
+                    events = get_all_events_before_prediction_time_from_xml(pid, pt, str(data_path))
 
                 if not events:
                     continue

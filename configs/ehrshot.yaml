@@ -18,7 +18,7 @@ data:
 
 # Labels root for task CSVs (override VISTA_LABELS_DIR when using this config).
 # Point to labels_100 after creating sampled labels.
-labels_dir: "data/collections/ehrshot/labels/labels_100"
+labels_dir: "data/collections/ehrshot/labels/labels_100_50pct_flip"
 
 # Logging
 logging:
