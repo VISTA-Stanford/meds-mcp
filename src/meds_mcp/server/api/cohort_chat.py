@@ -457,14 +457,19 @@ async def cohort_chat(payload: CohortChatRequest):
     is_vista_task = task_name and task_name in ALL_TASKS
 
     if is_vista_task:
+        task_sentence = TASK_PREDICTION_TARGET.get(
+            task_name, payload.question or "will have the outcome of interest"
+        )
         system_prompt = (
-            "You are an AI system performing binary clinical outcome prediction from structured patient data.\n\n"
-            "You will be asked to predict whether a specified clinical event occurs within a defined prediction window "
-            "based on a provided timeline of medical events.\n\n"
-            "Respond with exactly one word: yes or no.\n"
-            "Output must be lowercase.\n\n"
-            "Do not include explanations, reasoning, punctuation, or any additional text.\n"
-            "Base your answer only on the information provided in the conversation.\n\n"
+            f"You are a clinical prediction model. Your task: Predict whether this patient {task_sentence}.\n\n"
+            "You have access to a specialized clinical prediction tool that returns a predicted probability for this task. "
+            "You may call this tool to get its estimate.\n\n"
+            "IMPORTANT: You must critically evaluate the tool's output against the patient's clinical history. "
+            "The tool returns a raw probability — you must decide how to interpret it. If the probability conflicts "
+            "with strong clinical evidence in the timeline, use your own clinical judgment. Do NOT blindly trust the tool's output.\n\n"
+            "After considering all evidence, respond with ONLY a JSON object with exactly two fields: "
+            '{"outcome": "yes" or "no", "reasoning": "brief explanation (2-3 sentences)"}. '
+            "Output valid JSON only. No additional text outside the JSON object.\n\n"
         )
     else:
         system_prompt = (
@@ -481,9 +486,7 @@ async def cohort_chat(payload: CohortChatRequest):
     if show_task_tool_line:
         tool_def = get_task_tool_definition(task_name, payload.prediction_time)
         tool_name = tool_def.get("function", {}).get("name", f"get_{task_name}_prediction")
-        system_prompt += (
-            f"You have access to the {tool_name} tool. Use it when appropriate to inform your answer.\n\n"
-        )
+        system_prompt += f"Use the {tool_name} tool when appropriate.\n\n"
     else:
         system_prompt += (
             "Answer based on the information in the conversation only. Do not use any tools.\n\n"
@@ -599,6 +602,15 @@ async def cohort_chat(payload: CohortChatRequest):
                     "tool_call_id": call_id,
                     "content": json.dumps(result),
                 })
+            messages.append({
+                "role": "user",
+                "content": (
+                    "IMPORTANT: Critically evaluate the tool's output against the patient's clinical history. "
+                    "The tool returns a raw probability — you must decide how to interpret it. If it conflicts "
+                    "with strong clinical evidence in the timeline, use your own clinical judgment. Do NOT blindly "
+                    "trust the tool's output. Give your final prediction in the required JSON format (outcome and reasoning)."
+                ),
+            })
             injected_tool_turn = True
 
     max_tool_iterations = 5
@@ -758,6 +770,16 @@ async def cohort_chat(payload: CohortChatRequest):
                     "content": result,
                 })
 
+            # Explicit critical evaluation instruction before final answer
+            messages.append({
+                "role": "user",
+                "content": (
+                    "IMPORTANT: Critically evaluate the tool's output against the patient's clinical history. "
+                    "The tool returns a raw probability — you must decide how to interpret it. If it conflicts "
+                    "with strong clinical evidence in the timeline, use your own clinical judgment. Do NOT blindly "
+                    "trust the tool's output. Give your final prediction in the required JSON format (outcome and reasoning)."
+                ),
+            })
             iteration += 1
             if payload.debug:
                 print("\n" + f"=== DEBUG: FULL MESSAGES before next create (iteration {iteration}) ===\n")

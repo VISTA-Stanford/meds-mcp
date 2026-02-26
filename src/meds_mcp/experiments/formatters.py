@@ -4,6 +4,7 @@ Binary tasks: yes / no
 Categorical tasks: severe / moderate / mild / normal (3, 2, 1, 0)
 """
 
+import json
 import re
 from typing import Optional
 
@@ -20,12 +21,37 @@ RESPONSE_FORMAT_CATEGORICAL = (
 )
 
 
+def normalize_binary_from_json(raw: Optional[str]) -> Optional[str]:
+    """If raw is JSON with an 'outcome' field (e.g. {"outcome": "no", "reasoning": "..."}), return outcome normalized to 'yes' or 'no'."""
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return None
+        outcome = obj.get("outcome")
+        if outcome is None:
+            return None
+        lower = str(outcome).strip().lower()
+        if lower in ("yes", "true", "1", "positive", "y"):
+            return "yes"
+        if lower in ("no", "false", "0", "negative", "n"):
+            return "no"
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def normalize_binary(raw: Optional[str]) -> Optional[str]:
     """Normalize LLM output to 'yes' or 'no' for binary tasks.
-    Extracts answer from reasoning (e.g. 'Based on... the answer is yes.').
+    If the response is JSON with an 'outcome' field, uses that; otherwise extracts from free text.
     """
     if raw is None:
         return None
+    # Prefer JSON {outcome: ..., reasoning: ...} when present
+    from_json = normalize_binary_from_json(raw)
+    if from_json is not None:
+        return from_json
     lower = str(raw).strip().lower()
     if lower in ("yes", "true", "1", "positive", "y"):
         return "yes"

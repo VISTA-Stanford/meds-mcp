@@ -50,6 +50,18 @@ def _value_to_yes_no(raw: str) -> str:
     return None
 
 
+def _outcome_from_raw_to_yes_no(raw_str: str):
+    """Parse raw JSON (e.g. {\"outcome\": \"no\", \"reasoning\": \"...\"}), return normalized yes/no from outcome."""
+    if raw_str is None or not str(raw_str).strip():
+        return None
+    try:
+        obj = json.loads(raw_str)
+        outcome = obj.get("outcome")
+        return _value_to_yes_no(outcome)
+    except Exception:
+        return None
+
+
 def load_tool_value_lookup(labels_dir: Path, task_names: list) -> pl.DataFrame:
     """Load CSV 'value' column per (patient_id, prediction_time, task_name) and normalize to yes/no.
     Used for LLM vs tool disagreement: compare LLM+tool output to what the tool (value) returned.
@@ -70,11 +82,12 @@ def load_tool_value_lookup(labels_dir: Path, task_names: list) -> pl.DataFrame:
         pred_col = "prediction_time" if "prediction_time" in tbl.columns else None
         if not pred_col:
             continue
-        val_lower = pl.col("value").str.to_lowercase().str.strip_chars()
+        # Cast to string so is_in works (CSV may infer value as boolean)
+        val_str = pl.col("value").cast(pl.Utf8).str.to_lowercase().str.strip_chars()
         tool_val = (
-            pl.when(val_lower.is_in(["true", "1", "yes"]))
+            pl.when(val_str.is_in(["true", "1", "yes"]))
             .then(pl.lit("yes"))
-            .when(val_lower.is_in(["false", "0", "no"]))
+            .when(val_str.is_in(["false", "0", "no"]))
             .then(pl.lit("no"))
             .otherwise(pl.lit(None))
         )
@@ -91,13 +104,16 @@ def load_tool_value_lookup(labels_dir: Path, task_names: list) -> pl.DataFrame:
 
 
 def load_results(jsonl_path: Path) -> pl.DataFrame:
-    """Load JSONL results, exclude ERROR rows."""
+    """Load JSONL results. Keep rows that have at least one of: llm_only_normalized, llm_plus_tool_normalized, or (if present) llm_only_raw/llm_plus_tool_raw. Exclude ERROR rows."""
     df = pl.read_ndjson(jsonl_path)
+    has_normalized = pl.col("llm_only_normalized").is_not_null() | pl.col("llm_plus_tool_normalized").is_not_null()
+    keep = has_normalized
+    if "llm_only_raw" in df.columns and "llm_plus_tool_raw" in df.columns:
+        keep = keep | pl.col("llm_only_raw").is_not_null() | pl.col("llm_plus_tool_raw").is_not_null()
     df = df.filter(
-        pl.col("llm_only_normalized").is_not_null()
-        & pl.col("llm_plus_tool_normalized").is_not_null()
-        & ~pl.col("llm_only_normalized").str.starts_with("[ERROR")
-        & ~pl.col("llm_plus_tool_normalized").str.starts_with("[ERROR")
+        keep
+        & (pl.col("llm_only_normalized").is_null() | ~pl.col("llm_only_normalized").str.starts_with("[ERROR"))
+        & (pl.col("llm_plus_tool_normalized").is_null() | ~pl.col("llm_plus_tool_normalized").str.starts_with("[ERROR"))
     )
     return df
 
@@ -197,6 +213,19 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"  Output dir: {out_dir}")
+
+    # Fill null normalized from raw JSON "outcome" (e.g. when system prompt puts outcome in raw only)
+    if "llm_only_raw" in df.columns and "llm_plus_tool_raw" in df.columns:
+        df = df.with_columns(
+            pl.when(pl.col("llm_only_normalized").is_null() & pl.col("llm_only_raw").is_not_null())
+            .then(pl.col("llm_only_raw").map_elements(_outcome_from_raw_to_yes_no, return_dtype=pl.Utf8))
+            .otherwise(pl.col("llm_only_normalized"))
+            .alias("llm_only_normalized"),
+            pl.when(pl.col("llm_plus_tool_normalized").is_null() & pl.col("llm_plus_tool_raw").is_not_null())
+            .then(pl.col("llm_plus_tool_raw").map_elements(_outcome_from_raw_to_yes_no, return_dtype=pl.Utf8))
+            .otherwise(pl.col("llm_plus_tool_normalized"))
+            .alias("llm_plus_tool_normalized"),
+        )
 
     # Option 2: load CSV 'value' (tool output) for LLM vs tool disagreement
     if args.labels_dir is not None:

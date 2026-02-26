@@ -91,10 +91,10 @@ def get_task_tool_definition(
 
     returns_phrase = TASK_TOOL_RETURNS.get(
         task_name,
-        f"whether the specified patient has the outcome for task {task_name}",
+        f"the specified patient has the outcome for task {task_name}",
     )
     tool_name = f"get_{task_name}_prediction"
-    description = f"Returns a binary prediction indicating {returns_phrase}."
+    description = f"A probabilistic clinical risk model that estimates the likelihood that {returns_phrase}. The output is a binary prediction derived from this probability."
     return {
         "type": "function",
         "function": {
