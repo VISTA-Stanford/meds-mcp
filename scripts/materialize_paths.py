@@ -212,15 +212,32 @@ def find_all_paths_to_roots(
     vocabularies: Optional[List[str]] = None,
     relationship_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
     current_path: Optional[List[str]] = None,
+    _cache: Optional[Dict[str, List[List[str]]]] = None,
 ) -> List[List[str]]:
     """
     Find all paths from code to any root node.
     
-    Returns list of paths, where each path is a list of codes from code to root.
+    Args:
+        ontology: Ontology instance
+        code: Starting code
+        vocabularies: Filter to specific vocabularies
+        relationship_types: Filter to specific relationship types
+        max_depth: Maximum depth to traverse (None = no limit)
+        max_paths: Maximum number of paths to return (None = no limit, default 10 recommended for polyhierarchies)
+        current_path: Internal - current path being built
+        _cache: Internal - memoization cache for paths from each node to roots
+    
+    Returns:
+        List of paths, where each path is a list of codes from code to root.
     """
     if current_path is None:
         current_path = []
+    
+    # Initialize cache on first call
+    if _cache is None:
+        _cache = {}
     
     # Check for cycles
     if code in current_path:
@@ -242,29 +259,75 @@ def find_all_paths_to_roots(
         # This is a root node
         return [current_path]
     
+    # Check cache for paths from this node (only if not in current path to avoid cycle issues)
+    # Cache key includes the relationship/vocabulary filters
+    cache_key = code
+    if cache_key in _cache and len(current_path) == 1:
+        # Only use cache for top-level calls (when current_path is just [code])
+        # For recursive calls, we need to build the full path
+        cached_suffix_paths = _cache[cache_key]
+        # Prepend nothing - cache stores full paths from this node
+        return cached_suffix_paths[:max_paths] if max_paths else cached_suffix_paths
+    
     # Recursively find paths from each parent
     all_paths = []
     for parent in parents:
-        parent_paths = find_all_paths_to_roots(
-            ontology,
-            parent,
-            vocabularies=vocabularies,
-            relationship_types=relationship_types,
-            max_depth=max_depth,
-            current_path=current_path,
-        )
-        all_paths.extend(parent_paths)
+        # Check if we already have enough paths
+        if max_paths is not None and len(all_paths) >= max_paths:
+            break
+        
+        # Check if parent's paths are cached (paths from parent to root)
+        if parent in _cache:
+            # Use cached suffix paths and prepend current path
+            # suffix_path starts with parent, so we include the whole thing
+            for suffix_path in _cache[parent]:
+                full_path = current_path + suffix_path
+                all_paths.append(full_path)
+                if max_paths is not None and len(all_paths) >= max_paths:
+                    break
+        else:
+            parent_paths = find_all_paths_to_roots(
+                ontology,
+                parent,
+                vocabularies=vocabularies,
+                relationship_types=relationship_types,
+                max_depth=max_depth,
+                max_paths=max_paths - len(all_paths) if max_paths else None,
+                current_path=current_path,
+                _cache=_cache,
+            )
+            all_paths.extend(parent_paths)
+            
+            # Cache paths from parent to root (suffix paths starting at parent)
+            # Extract suffix paths: for each path, take the portion starting at parent
+            if parent_paths:
+                parent_idx = len(current_path)  # parent is at this index in full paths
+                suffix_paths = [path[parent_idx:] for path in parent_paths]
+                _cache[parent] = suffix_paths
     
-    return all_paths
+    # Cache paths from this code to root (for top-level reuse)
+    if len(current_path) == 1:
+        _cache[code] = all_paths
+    
+    return all_paths[:max_paths] if max_paths else all_paths
 
 
-def materialize_icd10cm_paths(ontology, code: str) -> List[List[str]]:
+def materialize_icd10cm_paths(
+    ontology,
+    code: str,
+    max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
+    cache: Optional[Dict[str, List[List[str]]]] = None,
+) -> List[List[str]]:
     """Materialize ICD10CM paths using 'Is a' relationships only."""
     return find_all_paths_to_roots(
         ontology,
         code,
         vocabularies=["ICD10CM"],
         relationship_types=["Is a"],
+        max_depth=max_depth,
+        max_paths=max_paths,
+        _cache=cache,
     )
 
 
@@ -298,23 +361,41 @@ def get_icd10cm_relationship_sets(ontology, code: str) -> Dict[str, Set[str]]:
     return result
 
 
-def materialize_snomed_paths(ontology, code: str) -> List[List[str]]:
+def materialize_snomed_paths(
+    ontology,
+    code: str,
+    max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
+    cache: Optional[Dict[str, List[List[str]]]] = None,
+) -> List[List[str]]:
     """Materialize SNOMED paths using 'Is a' relationships only."""
     return find_all_paths_to_roots(
         ontology,
         code,
         vocabularies=["SNOMED"],
         relationship_types=["Is a"],
+        max_depth=max_depth,
+        max_paths=max_paths,
+        _cache=cache,
     )
 
 
-def materialize_loinc_paths(ontology, code: str) -> List[List[str]]:
+def materialize_loinc_paths(
+    ontology,
+    code: str,
+    max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
+    cache: Optional[Dict[str, List[List[str]]]] = None,
+) -> List[List[str]]:
     """Materialize LOINC paths using 'Is a' relationships only."""
     return find_all_paths_to_roots(
         ontology,
         code,
         vocabularies=["LOINC"],
         relationship_types=["Is a"],
+        max_depth=max_depth,
+        max_paths=max_paths,
+        _cache=cache,
     )
 
 
@@ -390,6 +471,9 @@ def materialize_rxnorm_paths(
     path_relationship_types: List[str],
     vocabularies: Optional[List[str]] = None,
     require_both_endpoints: bool = True,
+    max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
+    cache: Optional[Dict[str, List[List[str]]]] = None,
 ) -> List[List[str]]:
     """
     Materialize RxNorm paths using "Is a" and "Maps to" relationships only.
@@ -400,6 +484,9 @@ def materialize_rxnorm_paths(
         path_relationship_types: List of path relationship types (typically ["Is a", "Maps to"])
         vocabularies: List of vocabularies to include (default: ["RxNorm"])
         require_both_endpoints: If True, only include edges where both endpoints are in vocabularies
+        max_depth: Maximum depth to traverse (None = no limit)
+        max_paths: Maximum number of paths to return (None = no limit)
+        cache: Optional shared cache for paths (speeds up processing multiple codes)
     """
     # Default to RxNorm only (not RxNorm Extension)
     if vocabularies is None:
@@ -411,6 +498,9 @@ def materialize_rxnorm_paths(
         code,
         vocabularies=vocabularies,
         relationship_types=path_relationship_types,
+        max_depth=max_depth,
+        max_paths=max_paths,
+        _cache=cache,
     )
 
 
@@ -1008,7 +1098,13 @@ Examples:
     parser.add_argument(
         "--max-depth",
         type=int,
-        help="Maximum depth to traverse"
+        help="Maximum depth to traverse (default: no limit)"
+    )
+    parser.add_argument(
+        "--max-paths-per-code",
+        type=int,
+        default=10,
+        help="Maximum number of paths to return per code (default: 10, use 0 for no limit)"
     )
     parser.add_argument(
         "--rxnorm-rels",
@@ -1154,6 +1250,13 @@ Examples:
                 ontology.load_relationship_type(rel_type)
             print()
     
+    # Convert max_paths_per_code=0 to None (no limit)
+    max_paths_limit = args.max_paths_per_code if args.max_paths_per_code > 0 else None
+    
+    # Shared cache for path finding across all codes (speeds up polyhierarchies significantly)
+    # The cache stores suffix paths (paths from each node to root) and is reused across codes
+    shared_path_cache: Dict[str, List[List[str]]] = {}
+    
     # Process each code
     for code, vocab in codes_to_process.items():
         if vocab is None:
@@ -1163,13 +1266,28 @@ Examples:
         relationship_sets = None
         
         if vocab == "ICD10CM":
-            paths = materialize_icd10cm_paths(ontology, code)
+            paths = materialize_icd10cm_paths(
+                ontology, code,
+                max_depth=args.max_depth,
+                max_paths=max_paths_limit,
+                cache=shared_path_cache,
+            )
             # Get 7th character modifier tokens if applicable
             relationship_sets = get_icd10cm_relationship_sets(ontology, code)
         elif vocab == "SNOMED":
-            paths = materialize_snomed_paths(ontology, code)
+            paths = materialize_snomed_paths(
+                ontology, code,
+                max_depth=args.max_depth,
+                max_paths=max_paths_limit,
+                cache=shared_path_cache,
+            )
         elif vocab == "LOINC":
-            paths = materialize_loinc_paths(ontology, code)
+            paths = materialize_loinc_paths(
+                ontology, code,
+                max_depth=args.max_depth,
+                max_paths=max_paths_limit,
+                cache=shared_path_cache,
+            )
         elif vocab in ["RxNorm", "RxNorm Extension"]:
             # RxNorm: use "Is a"/"Maps to" for paths, other relationships for sets
             if rxnorm_path_relationship_types:
@@ -1180,6 +1298,9 @@ Examples:
                     path_relationship_types=rxnorm_path_relationship_types,
                     vocabularies=rxnorm_vocabularies,
                     require_both_endpoints=rxnorm_require_both if use_athena else False,
+                    max_depth=args.max_depth,
+                    max_paths=max_paths_limit,
+                    cache=shared_path_cache,
                 )
                 
                 # Get relationship sets using other relationship types
@@ -1199,6 +1320,8 @@ Examples:
                     vocabularies=vocabularies,
                     relationship_types=["Is a"],
                     max_depth=args.max_depth,
+                    max_paths=max_paths_limit,
+                    _cache=shared_path_cache,
                 )
         else:
             # Default: use "Is a" relationships
@@ -1207,6 +1330,8 @@ Examples:
                 code,
                 relationship_types=["Is a"],
                 max_depth=args.max_depth,
+                max_paths=max_paths_limit,
+                _cache=shared_path_cache,
             )
         
         # Use the mode specified by the user
