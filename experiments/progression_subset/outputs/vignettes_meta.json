@@ -1,0 +1,20 @@
+{
+  "vignettes_path": "/Users/Ayeeshi/Documents/Stanford/Research/meds-mcp/experiments/progression_subset/outputs/vignettes.jsonl",
+  "resume": true,
+  "n_written_this_run": 5469,
+  "n_skipped_this_run": 427,
+  "n_already_complete_before_run": 2325,
+  "n_total_person_ids_in_file_after_run": 7794,
+  "n_xml_not_in_csv": 1129,
+  "n_candidates_eligible": 8221,
+  "n_remaining_after_resume_filter": 5896,
+  "n_encounters": 2,
+  "model": "apim:gpt-4.1-mini",
+  "corpus_dir": "/Users/Ayeeshi/Documents/Stanford/Research/meds-mcp/data/collections/vista_bench/thoracic_cohort_lumia",
+  "require_complete_rows": true,
+  "csv_stats": {
+    "incomplete_rows": 45160,
+    "patients_excluded_any_incomplete_row": 1129,
+    "patients_kept": 8221
+  }
+}
