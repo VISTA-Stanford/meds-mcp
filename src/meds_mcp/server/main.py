@@ -15,6 +15,7 @@ import os
 os.environ["JAX_PLATFORMS"] = "cpu"  # Suppress TPU warnings
 
 import asyncio
+import sys
 import uvicorn
 import yaml
 import logging
@@ -76,6 +77,8 @@ def initialize_server(config: Dict[str, Any]):
         config.get("data", {}).get("load_all_patients", False)
         or os.getenv("LOAD_ALL_PATIENTS", "false").lower() == "true"
     )
+    # Get optional single patient_id from config or environment variable
+    patient_id = config.get("data", {}).get("patient_id") or os.getenv("PATIENT_ID")
 
     # Validate and report on corpus directory
     data_path = Path(data_dir)
@@ -119,7 +122,9 @@ def initialize_server(config: Dict[str, Any]):
         raise
 
     # Initialize document store
-    if load_all_patients:
+    if patient_id:
+        logging.info(f"🚀 Initializing document store for single patient: {patient_id}")
+    elif load_all_patients:
         logging.info(
             "🚀 Initializing document store with ALL patients loaded (development mode)..."
         )
@@ -127,7 +132,9 @@ def initialize_server(config: Dict[str, Any]):
         logging.info("🚀 Initializing document store (lazy loading mode)...")
 
     try:
-        initialize_document_store(data_dir, cache_dir, load_all_patients)
+        initialize_document_store(
+            data_dir, cache_dir, load_all_patients, patient_id=patient_id
+        )
         logging.info("✅ Document store initialized successfully")
     except Exception as e:
         logging.error(f"❌ Failed to initialize document store: {e}")
@@ -174,6 +181,7 @@ def initialize_server(config: Dict[str, Any]):
                 # reset_index=meili_cfg.get("reset_on_startup", False),
                 reset_index=True,
                 max_patients=meili_cfg.get("max_patients", None),
+                patient_id=patient_id,
             )
 
 
@@ -187,10 +195,22 @@ def main():
         default="config.yaml",
         help="Path to configuration file (default: config.yaml)",
     )
+    parser.add_argument(
+        "--patient_id",
+        type=str,
+        default=None,
+        help="Load only this patient ID (e.g. 127672063). If not set, all patients in the corpus are loaded.",
+    )
     args = parser.parse_args()
 
     # Load configuration
     config = load_config(args.config)
+
+    # Merge CLI patient_id into config so initialize_server can use it
+    if getattr(args, "patient_id", None):
+        if "data" not in config:
+            config["data"] = {}
+        config["data"]["patient_id"] = args.patient_id
 
     # Get server settings early for startup message
     server_config = config.get("server", {})
@@ -244,6 +264,8 @@ def main():
         reindex_patients,
     )
 
+    print("📦 Loading readmission tool...", flush=True)
+    from meds_mcp.server.tools.readmission import get_readmission_prediction
 
     # Initialize server components
     print("🚀 Initializing server components...", flush=True)
@@ -277,6 +299,9 @@ def main():
 
     search_patients_tool = mcp.tool("search_patients")(search_patients)
     reindex_patients_tool = mcp.tool("reindex_patients")(reindex_patients)
+    get_readmission_prediction_tool = mcp.tool("get_readmission_prediction")(
+        get_readmission_prediction
+    )
 
     print("🔧 Registering MCP tools...", flush=True)
     print("✅ All tools registered", flush=True)

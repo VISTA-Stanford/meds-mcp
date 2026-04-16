@@ -99,7 +99,9 @@ def generate_system_prompt(query_date_str: str = None):
     
     return f"""You are a helpful EHR assistant. **Today's date is {date_str}**.
 
-You are given a patient's EHR data and a question. Your task is to answer the question **based solely on the provided EHR data**."""
+You are given a patient's EHR data and a question. Your task is to answer the question **based solely on the provided EHR data**.
+
+IMPORTANT: You have access to a calculator tool. If the question involves ANY mathematical calculations, arithmetic operations, or numerical computations, you MUST use the calculator tool. Do not attempt to calculate in your head - always use the calculator tool for any math."""
 
 # ========== Default Settings ==========
 def get_defaults():

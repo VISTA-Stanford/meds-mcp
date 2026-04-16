@@ -163,9 +163,13 @@ def build_patient_index_from_corpus(
     reset_index: bool = False,
     batch_size: int = 50,
     max_patients: Optional[int] = None,
+    patient_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Index all patient XML files in the given directory into MeiliSearch.
+    Index patient XML files in the given directory into MeiliSearch.
+
+    If patient_id is set, only that patient's XML file is indexed.
+    Otherwise all (or up to max_patients) XML files are indexed.
 
     This function is meant to be called from the server (e.g., during startup)
     with an already-configured MCPMeiliSearch instance.
@@ -178,12 +182,16 @@ def build_patient_index_from_corpus(
         }
     """
     data_path = Path(data_dir)
-    xml_files: List[Path] = list(data_path.glob("*.xml"))
+    if patient_id:
+        single = data_path / f"{patient_id}.xml"
+        xml_files = [single] if single.exists() else []
+    else:
+        xml_files = list(data_path.glob("*.xml"))
     if not xml_files:
         print(f"[patient_index] No XML files found in {data_dir}")
         return {"indexed": 0, "data_dir": data_dir, "index_name": index_name}
 
-    if max_patients:
+    if max_patients and not patient_id:
         xml_files = xml_files[:max_patients]
 
     print(f"[patient_index] Found {len(xml_files)} XML files in {data_dir}")

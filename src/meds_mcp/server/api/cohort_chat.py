@@ -1,29 +1,86 @@
 # src/meds_mcp/server/api/cohort_chat.py
 
-from typing import List, Optional, Dict, Any
 import json
 import datetime as dt
+import logging
+import textwrap
+from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-import logging
-from fastapi import HTTPException
-
-from meds_mcp.server.rag.simple_storage import (
-    get_all_patient_events,
-)
-from examples.mcp_chat_demo.chat.llm.secure_llm_client import (
+from meds_mcp.server.rag.simple_storage import get_all_patient_events
+from meds_mcp.server.llm import (
     get_llm_client,
     extract_response_content,
     get_default_generation_config,
+)
+from meds_mcp.server.tools.calculator import (
+    get_calculator_tool_definition,
+    execute_tool_call,
+)
+from meds_mcp.server.tools.readmission import (
+    get_readmission_prediction,
+    get_readmission_tool_definition,
 )
 
 def _json_default(obj):
     if isinstance(obj, (dt.datetime, dt.date)):
         return obj.isoformat()
-    # fallback:
     return str(obj)
+
+
+def _tool_call_to_dict(tool_call: Any) -> Dict[str, Any]:
+    """Normalize tool_call from API response (dict or object) to dict."""
+    if isinstance(tool_call, dict):
+        return tool_call
+    fn = getattr(tool_call, "function", None)
+    return {
+        "id": getattr(tool_call, "id", ""),
+        "function": {
+            "name": getattr(fn, "name", "") if fn else "",
+            "arguments": getattr(fn, "arguments", "{}") if fn else "{}",
+        },
+    }
+
+
+def _tool_error(name: str, message: str) -> str:
+    """Return a structured error string for tool failures."""
+    return json.dumps({"error": message, "tool": name})
+
+
+async def execute_cohort_tool_call(
+    tool_call_dict: Dict[str, Any],
+    patient_ids: List[str],
+) -> str:
+    """
+    Execute a tool call for cohort chat. Handles get_readmission_prediction (async)
+    and delegates others (e.g. calculator) to the sync execute_tool_call.
+    """
+    try:
+        name = (tool_call_dict.get("function") or {}).get("name", "")
+        raw_args = (tool_call_dict.get("function") or {}).get("arguments", "{}")
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            return _tool_error(name, f"Invalid arguments for {name}")
+
+        if name == "get_readmission_prediction":
+            person_id = args.get("person_id") or (patient_ids[0] if patient_ids else None)
+            if not person_id:
+                return json.dumps({
+                    "error": "No person_id provided and cohort has no patient IDs.",
+                    "readmission": None,
+                })
+            result = await get_readmission_prediction(person_id)
+            return json.dumps(result)
+
+        return execute_tool_call(tool_call_dict)
+    except Exception as e:
+        logger.exception("Cohort tool execution failed")
+        name = (tool_call_dict.get("function") or {}).get("name", "?")
+        return _tool_error(name, str(e))
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -119,9 +176,6 @@ async def cohort_chat(payload: CohortChatRequest):
         )
 
     # 2) Build a compact prompt for the LLM
-    import textwrap
-    import json
-
     context_snippets = []
 
     # evidence + event index for frontend
@@ -223,7 +277,10 @@ async def cohort_chat(payload: CohortChatRequest):
         "Whenever you make a statement that is directly supported by a specific event, "
         "append a citation in the form [[event_key]]. For example: "
         "\"Patient 123456 had a high creatinine [[123456:ev42]]\".\n"
-        "Use citations when possible, but you may omit them for very high-level summaries."
+        "Use citations when possible, but you may omit them for very high-level summaries.\n\n"
+        "You have access to tools: a calculator (for any arithmetic or numerical computation) and "
+        "get_readmission_prediction (to look up predicted readmission for a patient in the cohort). "
+        "Use the calculator for ANY math; use get_readmission_prediction when asked about readmission risk or prediction."
     )
 
 
@@ -244,25 +301,126 @@ async def cohort_chat(payload: CohortChatRequest):
         """
     )
 
-    # 3) Call secure LLM (via secure-llm client)
+    # 3) Call secure LLM with tool-calling
     client = get_llm_client(payload.model)
     model_name = payload.model or "apim:gpt-4.1-mini"  # adapt default to your registry
-
-    # Merge default generation config with user overrides
     gen_cfg = get_default_generation_config(payload.generation_config)
 
-    messages = [
+    tools = [
+        get_readmission_tool_definition(),
+        get_calculator_tool_definition(),
+    ]
+    used_ids = [entry["patient_id"] for entry in cohort_context]
+
+    messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
+    max_tool_iterations = 5
+    response = None
+    use_tools = True
+
     try:
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            **gen_cfg,
-        )
-        answer_text = extract_response_content(completion)
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                **gen_cfg,
+            )
+            logger.info(
+                "Cohort chat: request sent with tools=%s",
+                [t.get("function", {}).get("name") for t in tools],
+            )
+        except (TypeError, ValueError, Exception) as tools_err:
+            err_msg = str(tools_err)
+            if "tool" in err_msg.lower() or "parse" in err_msg.lower() or "NoneType" in err_msg:
+                logger.warning(
+                    "Cohort chat: API failed with tools, falling back to no tools: %s",
+                    err_msg[:200],
+                )
+                use_tools = False
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    **gen_cfg,
+                )
+            else:
+                raise
+
+        iteration = 0
+        while use_tools and iteration < max_tool_iterations:
+            if isinstance(response, dict):
+                choices = response.get("choices", [])
+            else:
+                choices = getattr(response, "choices", []) or []
+
+            if not choices:
+                break
+
+            if isinstance(choices[0], dict):
+                message = choices[0].get("message", {})
+            else:
+                message = getattr(choices[0], "message", {})
+
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+            if not tool_calls:
+                # Normal: model returned final text answer (no more tool use)
+                if iteration > 0:
+                    logger.info(
+                        "Cohort chat: model returned final answer after %s tool round(s)",
+                        iteration,
+                    )
+                break
+            logger.info(
+                "Cohort chat: executing %s tool call(s)",
+                len(tool_calls) if isinstance(tool_calls, list) else 1,
+            )
+
+            tool_calls_list = tool_calls if isinstance(tool_calls, list) else [tool_calls]
+            message_content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+
+            # Normalize tool_calls for API (some clients expect list of dicts with function.name, function.arguments)
+            tool_calls_for_api = []
+            for tc in tool_calls_list:
+                d = _tool_call_to_dict(tc)
+                tool_calls_for_api.append({
+                    "id": d.get("id", ""),
+                    "type": "function",
+                    "function": {"name": d["function"]["name"], "arguments": d["function"].get("arguments", "{}")},
+                })
+
+            messages.append({
+                "role": "assistant",
+                "content": message_content,
+                "tool_calls": tool_calls_for_api,
+            })
+
+            for tc in tool_calls_list:
+                tc_dict = _tool_call_to_dict(tc)
+                tool_name = tc_dict.get("function", {}).get("name", "?")
+                tool_args = tc_dict.get("function", {}).get("arguments", "{}")
+                print(f"Cohort chat: executing tool: {tool_name} (args: {tool_args})")
+                logger.info("Cohort chat: executing tool: %s with args: %s", tool_name, tool_args)
+                result = await execute_cohort_tool_call(tc_dict, used_ids)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_dict.get("id", ""),
+                    "content": result,
+                })
+
+            iteration += 1
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                **gen_cfg,
+            )
+
+        answer_text = extract_response_content(response)
     except Exception as e:
         msg = str(e)
         logger.exception("LLM generation failed")
@@ -277,8 +435,6 @@ async def cohort_chat(payload: CohortChatRequest):
             )
 
         raise HTTPException(status_code=500, detail=f"LLM generation failed: {msg}")
-
-    used_ids = [entry["patient_id"] for entry in cohort_context]
 
     return CohortChatResponse(
         answer=answer_text,

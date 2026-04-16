@@ -88,11 +88,16 @@ class XMLDocumentStore:
     """Document store for patient timelines using XML files."""
 
     def __init__(
-        self, data_dir: str, cache_dir: str = "cache", load_all_patients: bool = False
+        self,
+        data_dir: str,
+        cache_dir: str = "cache",
+        load_all_patients: bool = False,
+        patient_id: Optional[str] = None,
     ):
         self.data_dir = Path(data_dir)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
+        self.patient_id = patient_id
 
         # Storage components
         self.docstore = SimpleDocumentStore()
@@ -109,8 +114,8 @@ class XMLDocumentStore:
         # XML loader and parser
         self.xml_loader = XMLDocumentLoader()
         self.xml_parser = SimpleXMLNodeParser(chunk_element="event", id_metadata_key="person_id")
-        
-        # Load all patients on initialization
+
+        # Load all patients on initialization (or only the single patient_id if set)
         self.load_all_patients()
     
     def load_patient_xml(self, filepath: str) -> Dict[str, Any]:
@@ -347,8 +352,12 @@ class XMLDocumentStore:
         return patient.get_events()
 
     def load_all_patients(self):
-        """Scan data_dir for XML files and load each patient."""
-        xml_files = list(self.data_dir.glob("*.xml"))
+        """Scan data_dir for XML files and load each patient (or only patient_id if set)."""
+        if self.patient_id:
+            xml_file = self.data_dir / f"{self.patient_id}.xml"
+            xml_files = [xml_file] if xml_file.exists() else []
+        else:
+            xml_files = list(self.data_dir.glob("*.xml"))
         total_files = len(xml_files)
         print(f"\n📁 Found {total_files} XML files to load", flush=True)
         
@@ -363,11 +372,18 @@ class XMLDocumentStore:
         
         print(f"\n✅ Finished loading {len(self.patients)} patients", flush=True)
 
-def initialize_document_store(data_dir: str, cache_dir: str = "cache", load_all_patients: bool = False) -> XMLDocumentStore:
+def initialize_document_store(
+    data_dir: str,
+    cache_dir: str = "cache",
+    load_all_patients: bool = False,
+    patient_id: Optional[str] = None,
+) -> XMLDocumentStore:
     """Initialize the global document store."""
     global _document_store
 
-    _document_store = XMLDocumentStore(data_dir, cache_dir, load_all_patients)
+    _document_store = XMLDocumentStore(
+        data_dir, cache_dir, load_all_patients, patient_id=patient_id
+    )
     return _document_store
 
 
