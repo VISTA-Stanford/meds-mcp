@@ -7,7 +7,6 @@ take last N encounters, LLM-summarize to vignette. Writes vignettes.jsonl for BM
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import logging
 import sys
@@ -19,9 +18,10 @@ for _p in (_REPO_ROOT / "src", _REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
-
-from experiments.progression_subset.timeline import extract_last_n_encounters_text
+from meds_mcp.similarity import (
+    PatientSimilarityPipeline,
+    load_patient_records_from_csv,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,77 +30,6 @@ try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None  # type: ignore[misc, assignment]
-
-
-def _row_fully_populated(row: dict[str, str | None], fieldnames: list[str]) -> bool:
-    """True if every column is present and non-empty after strip."""
-    for key in fieldnames:
-        raw = row.get(key)
-        if raw is None:
-            return False
-        if str(raw).strip() == "":
-            return False
-    return True
-
-
-def load_embed_times(
-    csv_path: Path,
-    *,
-    require_complete_rows: bool = True,
-) -> tuple[dict[str, str], dict[str, int]]:
-    """
-    Build person_id -> embed_time (first row seen per patient).
-
-    When require_complete_rows is True (default), exclude any person_id that appears in at
-    least one CSV row with a missing or blank value in any column. This avoids precomputing
-    vignettes for patients with incomplete label rows.
-    """
-    if not require_complete_rows:
-        m: dict[str, str] = {}
-        with open(csv_path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                pid = str(row.get("person_id", "")).strip()
-                if not pid:
-                    continue
-                et = str(row.get("embed_time", "")).strip()
-                if pid not in m:
-                    m[pid] = et
-        return m, {}
-
-    bad_pids: set[str] = set()
-    incomplete_rows = 0
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = list(reader.fieldnames or [])
-        if not fieldnames:
-            return {}, {"incomplete_rows": 0, "patients_excluded": 0, "patients_kept": 0}
-        for row in reader:
-            r = {k: row.get(k) for k in fieldnames}
-            if not _row_fully_populated(r, fieldnames):
-                incomplete_rows += 1
-                pid = str(r.get("person_id", "") or "").strip()
-                if pid:
-                    bad_pids.add(pid)
-
-    m = {}
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = list(reader.fieldnames or [])
-        for row in reader:
-            pid = str(row.get("person_id", "")).strip()
-            if not pid or pid in bad_pids:
-                continue
-            et = str(row.get("embed_time", "")).strip()
-            if pid not in m:
-                m[pid] = et
-
-    stats = {
-        "incomplete_rows": incomplete_rows,
-        "patients_excluded_any_incomplete_row": len(bad_pids),
-        "patients_kept": len(m),
-    }
-    return m, stats
 
 
 def load_completed_person_ids(jsonl_path: Path) -> set[str]:
@@ -150,7 +79,6 @@ def main() -> None:
     parser.add_argument("--n-encounters", type=int, default=2, help="Last N encounters after chop")
     parser.add_argument("--model", type=str, default="apim:gpt-4.1-mini", help="LLM for vignette")
     parser.add_argument("--limit", type=int, default=None, help="Max patients to process (debug)")
-    parser.add_argument("--use-dspy", action="store_true", help="Use DSPy path in SecureLLMSummarizer")
     parser.add_argument(
         "--no-progress",
         action="store_true",
@@ -169,23 +97,27 @@ def main() -> None:
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    embed_times, csv_stats = load_embed_times(
+    records = load_patient_records_from_csv(
         args.csv,
-        require_complete_rows=not args.no_require_complete_rows,
+        require_all_columns_populated=not args.no_require_complete_rows,
     )
-    if csv_stats:
-        logger.info(
-            "CSV filter (all columns non-empty per row): "
-            "incomplete_rows=%s patients_excluded=%s patients_kept=%s",
-            csv_stats.get("incomplete_rows"),
-            csv_stats.get("patients_excluded_any_incomplete_row"),
-            csv_stats.get("patients_kept"),
-        )
-    summarizer = SecureLLMSummarizer(
+    embed_times: dict[str, str] = {
+        r.person_id: r.cutoff_date for r in records if r.cutoff_date
+    }
+    logger.info(
+        "CSV loader: patients_kept=%d (blank embed_time excluded=%d)",
+        len(embed_times),
+        len(records) - len(embed_times),
+    )
+    pipeline = PatientSimilarityPipeline(
+        xml_dir=str(args.corpus_dir),
         model=args.model,
+        n_encounters=args.n_encounters,
         generation_overrides={"temperature": 0.2, "max_tokens": 1024},
-        use_dspy=args.use_dspy,
     )
+    summarizer = pipeline.summarizer
+    base_generator = pipeline.base_generator
+    assert summarizer is not None  # use_llm_vignettes defaults to True
 
     out_path = args.output_dir / "vignettes.jsonl"
     xml_all = sorted(args.corpus_dir.glob("*.xml"))
@@ -232,8 +164,10 @@ def main() -> None:
             pid = xml_path.stem
             et = embed_times[pid]
             try:
-                text = extract_last_n_encounters_text(
-                    xml_path, args.n_encounters, et
+                text = base_generator.generate(
+                    patient_id=pid,
+                    cutoff_date=et,
+                    n_encounters=args.n_encounters,
                 )
             except Exception as e:
                 logger.warning("Timeline extract failed %s: %s", pid, e)
@@ -291,7 +225,8 @@ def main() -> None:
         "model": args.model,
         "corpus_dir": str(args.corpus_dir),
         "require_complete_rows": not args.no_require_complete_rows,
-        "csv_stats": csv_stats,
+        "n_csv_rows_loaded": len(records),
+        "n_patients_with_embed_time": len(embed_times),
     }
     with open(args.output_dir / "vignettes_meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)

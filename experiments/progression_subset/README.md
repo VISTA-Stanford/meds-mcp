@@ -12,7 +12,7 @@ The model must answer with exactly **-1**, **0**, or **1**. Analysis reports acc
 
 - Lumia XML under `data/collections/vista_bench/thoracic_cohort_lumia/` (from `configs/vista.yaml` `data.corpus_dir`).
 - Secure LLM credentials (same as the rest of `meds-mcp`).
-- `bm25s` (declared in project dependencies).
+- BM25 retrieval is provided by `llama-index-retrievers-bm25` via `meds_mcp.similarity.PatientBM25Index`.
 
 ## Steps (from repository root)
 

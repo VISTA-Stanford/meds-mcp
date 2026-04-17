@@ -1,12 +1,13 @@
+"""Secure LLM adapter for vignette summarization."""
+
 from typing import Optional, Dict, Any
 from pathlib import Path
-import sys
 
-
-# Ensure the examples chat package is on the import path
-EXAMPLES_CHAT_DIR = Path(__file__).resolve().parents[3] / "examples" / "mcp_chat_demo" / "chat"
-if EXAMPLES_CHAT_DIR.is_dir():
-    sys.path.insert(0, str(EXAMPLES_CHAT_DIR))
+from meds_mcp.server.llm import (
+    get_llm_client,
+    extract_response_content,
+    get_default_generation_config,
+)
 
 # Path to external prompt file
 PROMPT_FILE = Path(__file__).resolve().parents[3] / "configs" / "prompts" / "vignette_prompt.txt"
@@ -19,85 +20,10 @@ def load_vignette_prompt() -> Optional[str]:
     return None
 
 
-from llm.secure_llm_client import (
-    get_llm_client,
-    extract_response_content,
-    get_default_generation_config,
-)
-
-# Optional DSPy import
-try:
-    import dspy
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-
-
-# Only define DSPy adapter when DSPy is available
-if DSPY_AVAILABLE:
-    class DSPySecureLLM(dspy.LM):
-        """DSPy language model adapter for SecureLLM"""
-
-        def __init__(self, secure_llm_summarizer):
-            super().__init__(model=secure_llm_summarizer.model)
-            self.summarizer = secure_llm_summarizer
-
-        def basic_request(self, prompt: str, **kwargs):
-            """Basic request interface for DSPy"""
-            response = self.summarizer.client.chat.completions.create(
-                model=self.summarizer.model,
-                messages=[{"role": "user", "content": prompt}],
-                **{**self.summarizer.gen_config, **kwargs}
-            )
-            return extract_response_content(response)
-
-        def __call__(self, prompt=None, messages=None, **kwargs):
-            """Main interface for DSPy LM"""
-            if messages:
-                # Handle chat-style messages
-                prompt_text = "\n".join([
-                    f"{m.get('role', 'user')}: {m.get('content', '')}"
-                    for m in messages
-                ])
-            else:
-                prompt_text = prompt or ""
-
-            return self.basic_request(prompt_text, **kwargs)
-else:
-    DSPySecureLLM = None  # Placeholder when DSPy not available
-
-
-# Only define DSPy Signature when DSPy is available
-if DSPY_AVAILABLE:
-    class ClinicalVignetteSummary(dspy.Signature):
-        """Generate a structured clinical vignette for tumor board discussion and patient similarity retrieval.
-
-        Produces concise summaries in tumor board format: [AGE][GENDER] with h/o [CANCER TYPE].
-        Includes cancer-specific biomarkers (lung: mutations, PD-L1; neuroendocrine: Ki67; etc.),
-        chronological treatment history, and most recent imaging. Uses medical abbreviations.
-        Limited to 999 characters.
-        """
-
-        timeline = dspy.InputField(
-            desc="Patient clinical timeline with chronological events including diagnoses, "
-                 "staging, treatments, lab results, imaging findings, and clinical assessments"
-        )
-
-        vignette = dspy.OutputField(
-            desc="Structured vignette (<999 chars) in format: '[AGE][GENDER] with h/o [CANCER TYPE + pathology]. "
-                 "Prior therapy: [chronological treatments]. Recent imaging: [most recent only].' "
-                 "Include cancer-specific markers (lung: histology, EGFR/KRAS/ALK, PD-L1 TPS; thymoma: WHO/Masaoka; "
-                 "neuroendocrine: Ki67; mesothelioma: subtype; pancreatic: MSI/MMR/HER2/KRAS). "
-                 "Use abbreviations (NSCLC, adeno, mets). No AI commentary. Preserve facts, no speculation."
-        )
-else:
-    ClinicalVignetteSummary = None  # Placeholder when DSPy not available
-
-
 class SecureLLMSummarizer:
     """
     Adapter to use secure-llm with LLMVignetteGenerator.
-    Supports both standard prompting and DSPy-based structured prompting.
+    Exposes summarize(text: str) -> str.
     """
 
     def __init__(
@@ -105,31 +31,14 @@ class SecureLLMSummarizer:
         model: str,
         system_prompt: Optional[str] = None,
         generation_overrides: Optional[Dict[str, Any]] = None,
-        use_dspy: bool = False,
     ):
         self.client = get_llm_client(model_name=model)
         self.model = model
-        self.use_dspy = use_dspy
 
         # Load prompt from external file, fall back to provided or default
         self.system_prompt = system_prompt or load_vignette_prompt() or self._default_prompt()
 
         self.gen_config = get_default_generation_config(generation_overrides)
-
-        # Initialize DSPy if requested
-        self.dspy_predictor = None
-        if self.use_dspy:
-            if not DSPY_AVAILABLE:
-                raise ImportError(
-                    "DSPy is not installed. Install with: pip install dspy-ai\n"
-                    "Or set use_dspy=False to use standard prompting."
-                )
-
-            # Configure DSPy with our secure LLM
-            self.dspy_lm = DSPySecureLLM(self)
-            dspy.settings.configure(lm=self.dspy_lm)
-            # Avoid DSPy JSON parsing by calling the LM directly with a strict prompt
-            self.dspy_predictor = None
 
     @staticmethod
     def _default_prompt() -> str:
@@ -153,20 +62,6 @@ class SecureLLMSummarizer:
         Returns:
             Clinical vignette (3-5 sentences)
         """
-        if self.use_dspy:
-            # Use DSPy LM directly to avoid adapter parsing issues
-            try:
-                dspy_prompt = (
-                    "Rewrite the patient timeline into a concise clinical vignette. "
-                    "Return only the vignette text as a single paragraph (3–5 sentences).\n\n"
-                    f"Timeline:\n{text}\n\n"
-                    "Vignette:"
-                )
-                return self.dspy_lm(dspy_prompt)
-            except Exception as e:
-                print(f"⚠️  DSPy prompting failed, falling back to standard prompt: {e}")
-
-        # Use standard prompting
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[

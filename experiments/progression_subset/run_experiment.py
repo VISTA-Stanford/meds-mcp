@@ -30,16 +30,7 @@ from meds_mcp.server.llm import (
     get_default_generation_config,
     get_llm_client,
 )
-from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
-
-from experiments.progression_subset.bm25_retrieval import (
-    build_vignette_index,
-    retrieve_similar as bm25_retrieve_similar,
-)
-from experiments.progression_subset.timeline import (
-    extract_last_n_encounters_text,
-    linearize_timeline_until_cutoff,
-)
+from meds_mcp.similarity import PatientBM25Index, PatientSimilarityPipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,8 +77,7 @@ def parse_tri_label(text: Optional[str]) -> Optional[str]:
 
 
 def ensure_query_vignette(
-    summarizer: SecureLLMSummarizer,
-    xml_path: Path,
+    pipeline: PatientSimilarityPipeline,
     embed_time: str,
     n_encounters: int,
     jsonl_vignettes: dict[str, dict[str, Any]],
@@ -100,11 +90,7 @@ def ensure_query_vignette(
         v = jsonl_vignettes[pid]["vignette"]
         computed[pid] = v
         return v
-    text = extract_last_n_encounters_text(xml_path, n_encounters, embed_time)
-    if not text.strip():
-        computed[pid] = ""
-        return ""
-    v = summarizer.summarize(text)
+    v = pipeline.generate_vignette(pid, cutoff_date=embed_time, n_encounters=n_encounters)
     computed[pid] = v
     return v
 
@@ -155,17 +141,18 @@ def main() -> None:
     parser.add_argument("--model", type=str, default="apim:gpt-4.1-mini")
     parser.add_argument("--delay-seconds", type=float, default=0.3)
     parser.add_argument("--limit", type=int, default=None, help="Max rows from sampled CSV")
-    parser.add_argument("--use-dspy", action="store_true")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     vignettes = load_vignettes_jsonl(args.vignettes_jsonl)
-    bm25_index = build_vignette_index(list(vignettes.values()))
-    summarizer = SecureLLMSummarizer(
+    bm25_index = PatientBM25Index.from_vignettes(list(vignettes.values()))
+    pipeline = PatientSimilarityPipeline(
+        xml_dir=str(args.corpus_dir),
         model=args.model,
+        n_encounters=args.n_encounters,
         generation_overrides={"temperature": 0.2, "max_tokens": 1024},
-        use_dspy=args.use_dspy,
     )
+    base_generator = pipeline.base_generator
     client = get_llm_client(args.model)
 
     rows: list[dict[str, str]] = []
@@ -193,8 +180,7 @@ def main() -> None:
                 continue
 
             q_vig = ensure_query_vignette(
-                summarizer,
-                xml_path,
+                pipeline,
                 et,
                 args.n_encounters,
                 vignettes,
@@ -205,11 +191,11 @@ def main() -> None:
                 logger.warning("Empty query vignette for %s", pid)
 
             query_timeline = trunc_text(
-                linearize_timeline_until_cutoff(xml_path, et), args.max_chars
+                base_generator.generate(pid, cutoff_date=et), args.max_chars
             )
 
             sims = (
-                bm25_retrieve_similar(bm25_index, q_vig, pid, args.top_k)
+                bm25_index.search(q_vig, top_k=args.top_k, exclude_person_id=pid)
                 if q_vig.strip()
                 else []
             )
@@ -217,16 +203,16 @@ def main() -> None:
             blocks_v2: list[str] = []
             blocks_v3: list[str] = []
             for sim in sims:
-                sid = sim["person_id"]
+                sid = sim.person_id
                 s_xml = args.corpus_dir / f"{sid}.xml"
                 if not s_xml.exists():
                     continue
                 s_et = str(vignettes.get(sid, {}).get("embed_time") or "").strip()
                 if not s_et:
                     continue
-                t2 = trunc_text(linearize_timeline_until_cutoff(s_xml, s_et), args.max_chars)
+                t2 = trunc_text(base_generator.generate(sid, cutoff_date=s_et), args.max_chars)
                 blocks_v2.append(f"Similar patient {sid} (context up to this patient's embed time {s_et}):\n{t2}")
-                t3 = trunc_text(linearize_timeline_until_cutoff(s_xml, et), args.max_chars)
+                t3 = trunc_text(base_generator.generate(sid, cutoff_date=et), args.max_chars)
                 blocks_v3.append(f"Similar patient {sid} (context up to query embed time {et}):\n{t3}")
 
             base_user = (
@@ -269,7 +255,7 @@ def main() -> None:
                 "raw_v1": raw1,
                 "raw_v2": raw2,
                 "raw_v3": raw3,
-                "similar_patient_ids": [s["person_id"] for s in sims],
+                "similar_patient_ids": [s.person_id for s in sims],
             }
             out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             out_f.flush()
