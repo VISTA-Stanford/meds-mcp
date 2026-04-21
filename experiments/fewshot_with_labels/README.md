@@ -16,10 +16,10 @@ Timelines are NOT stored — they are regenerated from the XML corpus at prompt-
 
 ### Retrieval (fixed)
 
-Per-task BM25 indices. For a query on task `X`:
+**BM25 similarity is computed on vignettes only, never on raw timelines** — regardless of `--context`. One BM25 index per task:
 
-- Candidates are **only patients in the train split with `label != -1` for task `X`**.
-- Each candidate's document is their **task-aligned vignette** — the `PatientState` at `(candidate.person_id, candidate_item.embed_time)`. When a patient has different embed_times across tasks, the vignette used for BM25 (and later shown in the LLM context) is the one built at the embed_time matching the task being searched.
+- Candidates: patients in the `train` split with `label != -1` for that task.
+- Each candidate's document is their **task-aligned vignette** — the `PatientState` at `(candidate.person_id, candidate_item.embed_time)`. When a patient has different embed_times across tasks, the vignette used for BM25 (and for the LLM context) is the one built at the embed_time matching the task being searched.
 - The query's retrieval vignette is likewise the state at `(query.person_id, query_item.embed_time)`.
 
 Implemented in `src/meds_mcp/similarity/task_retriever.py` (`TaskAwareRetriever`).
@@ -38,86 +38,248 @@ The four variants form two paired 1:1 comparisons where only the similars block 
 - `baseline_vignette` ↔ `vignette` — effect of adding similars, query rendered as vignette in both.
 - `baseline_timeline` ↔ `timeline` — effect of adding similars, query rendered as timeline in both.
 
-`analyze_results.py` uses these pairings when computing flip / fix / hurt rates. A cross-pair comparison (`baseline_vignette` vs `baseline_timeline`, or `vignette` vs `timeline`) isolates the effect of query representation alone.
+`analyze_results.py` uses these pairings when computing flip / fix / hurt rates. Cross-pair comparisons (`baseline_vignette` vs `baseline_timeline`, `vignette` vs `timeline`) isolate the effect of query representation alone.
 
 Similar patients' question text is omitted (same task ⇒ identical wording, just wastes tokens). Label is shown as `Yes` / `No` (from `label_description`), not the numeric code.
 
-### Evaluation
+### Evaluation defaults
 
-- Split policy: sample evaluation pool from the `valid` split; retrieval candidates come only from `train`. Test is held out.
-- Query pool: seeded random sample of 100 unique `person_id` from `valid` (configurable via `--n` at sample time).
-- For each sampled patient, run **all** their non-(-1) task items.
-- LLM answer is parsed to `Yes` / `No` and compared to ground truth.
-
-### Caveats
-
-- 100 valid pids × 40 tasks — per-task n is small (order of tens). `analyze_results.py` flags tasks with `n < 10`. **Primary metric: overall accuracy.** Per-task numbers are exploratory.
+- Query pool: sampled from a split (`valid` by default, `test` optional); retrieval candidates come only from `train`.
+- LLM: `temperature=0`, seed logged per row. Output parsed to `Yes`/`No` and compared to ground truth.
+- Per-task n may be small depending on pool size; `analyze_results.py` flags tasks with `n < 10`. **Primary metric: overall accuracy.**
 
 ---
 
-## Prerequisites
+## Setup
 
-- Lumia XML under `data/collections/vista_bench/thoracic_cohort_lumia/`.
-- Full cohort CSV at `data/collections/vista_bench/bikia_dev-lumia_cohort_progression_tasks-000000000000.csv` (columns: `person_id, split, embed_time, task, task_group, question, label, label_description`).
-- Secure LLM credentials (same as the rest of `meds-mcp`).
-
-## Run (from repository root)
+### Local
 
 ```bash
-# 1) Build the cohort: filters label=-1, writes patients.jsonl + items.jsonl. Fast, no LLM.
-uv run python experiments/fewshot_with_labels/build_cohort.py
-
-# 2) Precompute vignettes for every patient (resumable; rerun to continue).
-uv run python experiments/fewshot_with_labels/precompute_vignettes.py \
-  --n-encounters 2 \
-  --model apim:gpt-4.1-mini
-
-# 3) Sample the evaluation pool (100 pids from valid split, seeded).
-uv run python experiments/fewshot_with_labels/sample_pool.py \
-  --n 100 --seed 42 --require-vignette --require-item
-
-# 4) Run one context variant per invocation (repeat for each variant to compare).
-uv run python experiments/fewshot_with_labels/run_experiment.py \
-  --context baseline_vignette --top-k 3 --model apim:gpt-4.1-mini
-
-uv run python experiments/fewshot_with_labels/run_experiment.py \
-  --context vignette --top-k 3 --model apim:gpt-4.1-mini
-
-uv run python experiments/fewshot_with_labels/run_experiment.py \
-  --context timeline --top-k 3 --model apim:gpt-4.1-mini
-
-# 5) Analyze (merges whichever experiment_results_<context>.jsonl files exist).
-uv run python experiments/fewshot_with_labels/analyze_results.py
+uv sync                               # installs Python deps from pyproject.toml + uv.lock
+cp .env.example .env                  # then edit .env with your VAULT_SECRET_KEY
 ```
+
+`.env` is auto-loaded on import by `experiments/fewshot_with_labels/_paths.py`. On a laptop with the repo's default data layout, no env vars need to be set.
+
+### GCP VM (or any Debian/Ubuntu host)
+
+The scripts use plain `pathlib`/`open()`, so `gs://...` URIs don't work directly. The setup script copies data from GCS to local disk and writes a `.env` pointing at the local copies — you only paste the vault key afterward.
+
+```bash
+git clone <repo-url> && cd meds-mcp
+
+# Installs apt + uv, copies CSV and XML corpus from GCS to local disk,
+# generates .env with the correct local paths. One command.
+bash scripts/setup_vm.sh --copy-gcs
+source ~/.bashrc
+
+# Paste VAULT_SECRET_KEY into the generated .env — only manual step.
+${EDITOR:-nano} .env
+
+uv sync
+```
+
+**Auth:** `gsutil` (and the fallback gcsfuse) need read access to the source buckets. Either attach a service account with `storage.objectViewer` to the VM, or run `gcloud auth application-default login` first. Create the VM with `--scopes=cloud-platform` for the zero-config path.
+
+**Defaults used by `--copy-gcs`:**
+
+| | Source | Local destination |
+|---|---|---|
+| CSV | `gs://su_vista_scratch/bikia_dev/lumia_cohort_progression_tasks-000000000000.csv` | `$HOME/data/lumia_cohort_progression_tasks-000000000000.csv` |
+| XML corpus | `gs://vista_bench/thoracic_cohort_lumia/` | `$HOME/data/thoracic_cohort_lumia/` |
+| Outputs | — | `$HOME/results/fewshot_with_labels_outputs/` |
+
+Override any of them at call time:
+
+```bash
+GCS_COHORT_CSV_URI=gs://my-bucket/some.csv \
+GCS_CORPUS_DIR_URI=gs://my-bucket/corpus \
+LOCAL_DATA_ROOT=$HOME/scratch \
+  bash scripts/setup_vm.sh --copy-gcs
+```
+
+Rerunning the script is safe: the CSV download skips if already present, and `gsutil -m rsync -r` for the corpus only transfers new/changed files.
+
+**Alternative: `--mount-gcs`** — if you prefer gcsfuse mounts over copying (useful when the corpus is too big to host locally). Same one-command flow, generates a `.env` pointing at `$HOME/gcs/<bucket>/...`. Noticeably slower for the 8k-XML precompute step than local disk, though.
+
+### Path resolution precedence (highest → lowest)
+
+1. CLI flag (`--csv`, `--corpus-dir`, `--output-dir`, `--patients`, `--items`, `--pool`).
+2. Env var already exported in the shell.
+3. `.env` at repo root (auto-loaded).
+4. Built-in local defaults (`data/collections/vista_bench/...`, `experiments/fewshot_with_labels/outputs/`).
+
+| Env var | What it points at |
+|---|---|
+| `VISTA_COHORT_CSV` | Source CSV for `build_cohort.py` |
+| `VISTA_CORPUS_DIR` | Directory of per-patient `{pid}.xml` files |
+| `VISTA_OUTPUTS_DIR` | Where all experiment artifacts are written |
+| `VAULT_SECRET_KEY` | Secure-llm auth (read by `securellm.Client` directly) |
+
+---
+
+## Run — exact commands (from repo root)
+
+### 1. Build cohort (fast, no LLM)
+
+```bash
+uv run python experiments/fewshot_with_labels/build_cohort.py
+# -> outputs/patients.jsonl  (one PatientState per (pid, embed_time))
+# -> outputs/items.jsonl     (one LabeledItem per (pid, task), label != -1)
+```
+
+### 2. Precompute vignettes (~8k LLM calls; resumable)
+
+```bash
+# Default: all events on/before embed_time (--n-encounters 0), USMLE-style prompt.
+uv run python experiments/fewshot_with_labels/precompute_vignettes.py \
+  --model apim:gpt-4.1-mini
+```
+
+Rerun the same command to resume after a crash; it skips states that already have a vignette. Add `--force` to regenerate all vignettes (e.g. after changing `configs/prompts/vignette_prompt.txt`). Use `--limit 30` for a small smoke test before the full run.
+
+### 3. Sample the evaluation pool
+
+Pick one pattern depending on what you want to evaluate on:
+
+```bash
+# A) Pilot: 100 random pids from valid (seeded, reproducible).
+uv run python experiments/fewshot_with_labels/sample_pool.py \
+  --split valid --n 100 --seed 42 --require-vignette --require-item
+# -> outputs/pool_valid_100.json
+
+# B) Full test-split run: every eligible test patient (no sampling).
+uv run python experiments/fewshot_with_labels/sample_pool.py \
+  --split test --all --require-vignette --require-item
+# -> outputs/pool_test_all.json
+```
+
+`--require-vignette` drops patients whose state has no vignette (e.g. `embed_time` before their first XML event). `--require-item` drops patients with zero non-(−1) items.
+
+### 4. Run the experiment — one invocation per `--context`
+
+```bash
+# Change --pool and --query-split to match the pool you sampled in step 3.
+POOL=experiments/fewshot_with_labels/outputs/pool_test_all.json
+QSPLIT=test
+
+uv run python experiments/fewshot_with_labels/run_experiment.py \
+  --context baseline_vignette --pool $POOL --query-split $QSPLIT \
+  --top-k 3 --model apim:gpt-4.1-mini
+
+uv run python experiments/fewshot_with_labels/run_experiment.py \
+  --context vignette          --pool $POOL --query-split $QSPLIT \
+  --top-k 3 --model apim:gpt-4.1-mini
+
+uv run python experiments/fewshot_with_labels/run_experiment.py \
+  --context baseline_timeline --pool $POOL --query-split $QSPLIT \
+  --top-k 3 --model apim:gpt-4.1-mini
+
+uv run python experiments/fewshot_with_labels/run_experiment.py \
+  --context timeline          --pool $POOL --query-split $QSPLIT \
+  --top-k 3 --model apim:gpt-4.1-mini
+```
+
+The scripts skip the BM25 build entirely for `baseline_*` variants (no similars shown → no retrieval). Each `--context` writes its own `experiment_results_<context>.jsonl` and can be rerun independently.
+
+### 5. Aggregate + compare to ground truth
+
+```bash
+uv run python experiments/fewshot_with_labels/analyze_results.py
+# -> outputs/analysis_summary.json    per-variant accuracy, per-task matrix, paired flip/fix/hurt
+# -> outputs/per_task_accuracy.csv    wide table for spreadsheet import
+# also prints a human-readable per-task table and paired-comparison block to stdout
+```
+
+---
+
+## Inspection utilities
+
+### Preview the prompt (no LLM call)
+
+```bash
+# Pick first pool pid + first non-(-1) task, print all 4 context prompts:
+uv run python experiments/fewshot_with_labels/show_prompt.py --context all
+
+# Specific (pid, task), single context:
+uv run python experiments/fewshot_with_labels/show_prompt.py \
+  --person-id 135908791 --task died_any_cause_1_yr --context vignette
+```
+
+### Sanity-check a results file
+
+```bash
+# Per-context row count and parse rate:
+for ctx in baseline_vignette vignette baseline_timeline timeline; do
+  f=experiments/fewshot_with_labels/outputs/experiment_results_$ctx.jsonl
+  [ -f "$f" ] || continue
+  n=$(wc -l < "$f")
+  p=$(grep -c '"pred": "\(Yes\|No\)"' "$f")
+  echo "$ctx: $p/$n parsed"
+done
+```
+
+---
 
 ## Outputs
 
-Default: `experiments/fewshot_with_labels/outputs/`
+Default: `experiments/fewshot_with_labels/outputs/` (or `$VISTA_OUTPUTS_DIR`). Directory is gitignored.
 
-| File | Description |
-|------|-------------|
-| `patients.jsonl` | One `PatientState` per unique `(person_id, embed_time)` (vignette filled by precompute step) |
-| `items.jsonl` | One `LabeledItem` per `(person_id, task)` after dropping label=-1 |
-| `pool_valid_<n>.json` | Sampled evaluation pool (sorted list of person_ids) |
-| `pool_valid_<n>_manifest.json` | Sampling manifest (seed, split, sizes) |
-| `experiment_results_<context>.jsonl` | Per-row predictions for that run |
-| `experiment_meta_<context>.json` | Run settings (model, seed, temperature, retrieval policy) |
-| `analysis_summary.json` | Per-variant accuracy, per-task breakdown, vs-baseline flip/fix/hurt |
+| File | Step | Description |
+|---|---|---|
+| `patients.jsonl` | 1, 2 | `PatientState` per `(person_id, embed_time)`; vignette filled by step 2 |
+| `items.jsonl` | 1 | `LabeledItem` per `(person_id, task)` after dropping `label=-1` |
+| `pool_<split>_<tag>.json` | 3 | Sampled evaluation pool (sorted list of person_ids) |
+| `pool_<split>_<tag>_manifest.json` | 3 | Sampling config (split, seed, sizes, whether `--all` was used) |
+| `experiment_results_<context>.jsonl` | 4 | One row per (pid, task): context, pred, raw, label, similars, model/seed/temperature |
+| `experiment_meta_<context>.json` | 4 | Run settings |
+| `analysis_summary.json` | 5 | Per-variant accuracy, per-task matrix, paired flip/fix/hurt |
+| `per_task_accuracy.csv` | 5 | Flat per-task × per-variant table for spreadsheets |
+
+---
 
 ## CLI reference
 
+### `build_cohort.py`
+- `--csv` (default: `VISTA_COHORT_CSV` → local CSV) — source of rows.
+- `--output-dir` (default: `VISTA_OUTPUTS_DIR`) — where to write patients/items.
+- `--drop-label` — labels to drop (repeatable; default `-1`).
+
+### `precompute_vignettes.py`
+- `--patients` / `--items` — cohort JSONLs (defaults honor env vars).
+- `--corpus-dir` (default: `VISTA_CORPUS_DIR`) — XML directory.
+- `--n-encounters` (default: **0** = all events on/before `embed_time`).
+- `--model` (default: `apim:gpt-4.1-mini`).
+- `--limit N` — process only N states (smoke).
+- `--force` — regenerate even if vignette already present.
+- `--no-progress` — disable tqdm.
+
+### `sample_pool.py`
+- `--split` (default `valid`).
+- `--n N` (default 100) — or `--all` to include every eligible pid.
+- `--seed` (default 42; ignored under `--all`).
+- `--require-vignette` / `--require-item` — skip empty-vignette or no-item patients.
+
 ### `run_experiment.py`
+- `--context {baseline_vignette,baseline_timeline,vignette,timeline}` *(required)*.
+- `--pool` — JSON list of pids (produced by step 3).
+- `--query-split` (default `valid`) / `--candidate-split` (default `train`).
+- `--top-k` (default 3) — similar patients injected into the prompt.
+- `--n` — process only first N pids in the pool (debug).
+- `--n-encounters` (default 0) — capacity on timeline context blocks.
+- `--max-chars` (default 120_000) — per-block timeline truncation.
+- `--model`, `--seed`, `--temperature`, `--delay-seconds`.
 
-- `--context {baseline_vignette,baseline_timeline,vignette,timeline}` *(required)*
-- `--top-k` (default 3)
-- `--n` — process only the first N patients in the pool (debug); default all
-- `--n-encounters` (default 2)
-- `--seed` (default 42)
-- `--temperature` (default 0.0)
-- `--model` (default `apim:gpt-4.1-mini`)
-- `--max-chars` (default 120_000) — per-block timeline truncation
-- `--query-split` / `--candidate-split` (defaults `valid` / `train`)
+### `analyze_results.py`
+- `--input-dir` / `--output-dir` (defaults: `VISTA_OUTPUTS_DIR`).
 
-### Defensive invariants
+### `show_prompt.py`
+- `--person-id`, `--task`, `--context` (or `all`), `--top-k`, `--show-system`.
 
-`TaskAwareRetriever.retrieve` asserts every returned neighbor has `split == "train"` and label not in `{-1}`. Cheap; catches cohort-rebuild bugs early.
+---
+
+## Defensive invariants
+
+- `TaskAwareRetriever.retrieve` asserts every returned neighbor has `split == "train"` (or whatever `--candidate-split` was set to) and `label not in drop_labels`.
+- BM25 is invariantly vignette↔vignette — comment at `run_experiment.py` call site and `task_retriever.py` module docstring both note this.
+- `CohortStore` rejects duplicate `(person_id, embed_time)` keys when constructed.
