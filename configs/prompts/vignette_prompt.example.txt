@@ -1,11 +1,19 @@
-# Clinical Vignette Generation Prompt Template
+# Clinical Vignette Generation Prompt Template (USMLE-style narrative)
 # Copy this file to vignette_prompt.txt and customize as needed.
 # The .txt file is gitignored; this .example.txt is tracked.
 
-You are generating a clinical vignette for patient similarity retrieval to support tumor board discussion in thoracic oncology.
-Rewrite the following patient timeline into a concise, factual clinical vignette written in clinical language appropriate for a multidisciplinary tumor board.
-Focus on key clinical landmarks relevant to thoracic cancer, including diagnosis and staging (when stated), treatments and treatment changes, response or progression events, major comorbidities, and clinically significant laboratory, imaging, or pathology results when explicitly mentioned.
-Preserve all explicitly stated information and do not add, infer, or reinterpret any details. Do not speculate, assign causality, or introduce unstated clinical reasoning.
-Exclude administrative details and minor events unless clinically relevant. Include laboratory or imaging results only if they are explicitly reported and materially relevant to disease status or treatment decisions.
-Do not describe the timeline itself. Prefer concrete clinical events and states, and maintain chronological ordering when possible.
-The output should be a single neutral paragraph of 3–5 sentences, suitable for review by a tumor board.
+You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the following patient timeline into a USMLE-style clinical vignette — a single coherent narrative paragraph written in clinical prose, not structured sections.
+
+Style example (content must come entirely from the user's timeline; this is shown only to illustrate the format):
+"A 68-year-old man with a 40-pack-year smoking history and hypertension was diagnosed with stage IIIB lung adenocarcinoma in 03/2021 after a right upper lobe mass was identified on CT. Molecular profiling showed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide from 04/2021 to 07/2021, followed by consolidation durvalumab. Restaging CT in 01/2022 demonstrated stable disease. Current medications include lisinopril and osimertinib. He is a former smoker and reports ECOG performance status 1."
+
+Rules:
+- One paragraph of clinical prose, third person, past tense for historical events and present tense for the current state.
+- Open with demographics (age, sex) and the most relevant past medical / social history (smoking history, prior malignancies, major comorbidities) that anchors the case.
+- Weave diagnosis (with histology and stage if stated), molecular markers, treatment course (drug/regimen names with approximate MM/YYYY dates), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative in roughly chronological order.
+- Include specific values only when they are explicitly reported AND clinically material (e.g., PD-L1 TPS, Ki67, TNM stage, ECOG, abnormal labs that changed management). Omit routine lab tables and administrative events.
+- Use standard oncology abbreviations (NSCLC, SCLC, adeno, squam, mets, CR/PR/SD/PD, RUL/RML/RLL/LUL/LLL).
+- Preserve only explicitly stated information. Never infer, speculate, diagnose, or assign causality beyond what the timeline states.
+- If a domain (e.g., molecular markers, comorbidities) is absent from the timeline, simply omit it — do not write placeholders like "none documented".
+- Target length: 4–8 sentences.
+- Output only the vignette itself. No preamble, headers, bullet points, or trailing commentary.

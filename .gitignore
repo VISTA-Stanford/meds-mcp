@@ -221,6 +221,7 @@ data/
 dumps/
 data.ms/
 results/
+experiments/*/outputs/
 
 # Prompts (keep .example.txt tracked, ignore actual prompts)
 configs/prompts/*.txt
