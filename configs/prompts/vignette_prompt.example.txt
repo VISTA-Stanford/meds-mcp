@@ -2,16 +2,19 @@
 # Copy this file to vignette_prompt.txt and customize as needed.
 # The .txt file is gitignored; this .example.txt is tracked.
 
-You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the following patient timeline into a USMLE-style clinical vignette — a single coherent narrative paragraph written in clinical prose, not structured sections.
+You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the following patient timeline into a USMLE-style clinical vignette — a single coherent narrative paragraph written in clinical prose.
 
-Style example (content must come entirely from the user's timeline; this is shown only to illustrate the format):
-"A 68-year-old man with a 40-pack-year smoking history and hypertension was diagnosed with stage IIIB lung adenocarcinoma in 03/2021 after a right upper lobe mass was identified on CT. Molecular profiling showed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide from 04/2021 to 07/2021, followed by consolidation durvalumab. Restaging CT in 01/2022 demonstrated stable disease. Current medications include lisinopril and osimertinib. He is a former smoker and reports ECOG performance status 1."
+Opening sentence (required): begin with patient demographics in classic USMLE form — "A <age>-year-old <sex> with <relevant history>…". Age, sex, race/ethnicity, smoking/tobacco history, and relevant prior cancers or comorbidities go here if they appear in the timeline. If any of those fields is absent from the timeline, omit that specific fragment (do not write "unknown").
+
+Subsequent sentences: weave diagnosis (with histology, laterality, and stage if stated), molecular markers, treatment course (drug/regimen names, surgery types, radiation), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative.
+
+Style example (format only; content must come entirely from the user's timeline):
+"A 68-year-old male former smoker (40 pack-years) with hypertension was diagnosed with stage IIIB lung adenocarcinoma after a right upper lobe mass was identified on surveillance CT. Molecular profiling revealed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide, followed by consolidation durvalumab. Restaging imaging subsequently demonstrated stable disease. Current medications include lisinopril and osimertinib; ECOG performance status is 1."
 
 Rules:
+- Strictly **NO dates, years, months, or numeric time references** (no "03/2021", no "2023", no "in July", no "6 months later"). Use relative / narrative chronology instead: "initially", "subsequently", "at the time of staging", "following treatment", "at most recent follow-up", "after completing chemoradiation".
 - One paragraph of clinical prose, third person, past tense for historical events and present tense for the current state.
-- Open with demographics (age, sex) and the most relevant past medical / social history (smoking history, prior malignancies, major comorbidities) that anchors the case.
-- Weave diagnosis (with histology and stage if stated), molecular markers, treatment course (drug/regimen names with approximate MM/YYYY dates), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative in roughly chronological order.
-- Include specific values only when they are explicitly reported AND clinically material (e.g., PD-L1 TPS, Ki67, TNM stage, ECOG, abnormal labs that changed management). Omit routine lab tables and administrative events.
+- Include specific values only when explicitly reported AND clinically material (PD-L1 TPS, Ki67, TNM stage, ECOG, abnormal labs that changed management). Omit routine lab tables and administrative events.
 - Use standard oncology abbreviations (NSCLC, SCLC, adeno, squam, mets, CR/PR/SD/PD, RUL/RML/RLL/LUL/LLL).
 - Preserve only explicitly stated information. Never infer, speculate, diagnose, or assign causality beyond what the timeline states.
 - If a domain (e.g., molecular markers, comorbidities) is absent from the timeline, simply omit it — do not write placeholders like "none documented".

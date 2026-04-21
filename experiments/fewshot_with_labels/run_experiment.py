@@ -53,6 +53,10 @@ from meds_mcp.similarity import (
 from experiments.fewshot_with_labels import _paths
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Silence llama-index's per-index "Building index from IDs objects" DEBUG spam
+# (40 lines per run_experiment invocation at startup). TaskAwareRetriever's
+# own INFO summary line ("TaskAwareRetriever built: N tasks ...") remains.
+logging.getLogger("llama_index").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 CONTEXT_CHOICES = (
@@ -127,44 +131,31 @@ def build_prompt(
     n_encounters: int,
     max_chars: int,
 ) -> str:
-    header = (
-        f"QUESTION:\n{question}\n\n"
-        f"Query patient {query_pid} - prediction time (embed time): {query_embed_time}\n"
-        f"Task: {task}\n\n"
-    )
-
-    # Query representation block — identical for paired baseline / with-similars.
+    # Query representation: vignette or chopped timeline.
     if context in QUERY_AS_VIGNETTE:
-        query_block = (
-            f"Query patient vignette (summary of events on or before prediction time):\n"
-            f"{query_vignette}\n"
-        )
+        query_text = query_vignette
     elif context in QUERY_AS_TIMELINE:
-        query_block = (
-            f"Query patient timeline (events on or before prediction time):\n"
-            f"{query_timeline}\n"
-        )
+        query_text = query_timeline
     else:
         raise ValueError(f"Unknown context: {context!r}")
 
-    # Baselines stop here — no similars shown.
-    if context not in WITH_SIMILARS:
-        return header + query_block
+    query_block = f"QUERY PATIENT INFORMATION:\n{query_text}\n"
+    question_block = f"QUESTION:\n{question}\n"
 
-    # With-similars variants render each neighbor in the same representation as
-    # the query so the prompt shape matches exactly aside from the similars block.
+    # Baselines: just patient info + question.
+    if context not in WITH_SIMILARS:
+        return f"{query_block}\n{question_block}"
+
+    # With-similars variants: render each neighbor in the same representation
+    # as the query, with their ground-truth Yes/No appended.
     blocks: list[str] = []
     for n in neighbors:
         answer = label_to_yesno(n.item.label)
         if context == "vignette":
-            blocks.append(
-                f"Similar patient {n.patient.person_id} "
-                f"(vignette up to {n.patient.embed_time}):\n{n.patient.vignette}\n"
-                f"Ground-truth answer for this patient: {answer}"
-            )
+            neighbor_text = n.patient.vignette
         else:  # context == "timeline"
             try:
-                t = base_generator.generate(
+                neighbor_text = base_generator.generate(
                     patient_id=n.patient.person_id,
                     cutoff_date=n.patient.embed_time,
                     n_encounters=n_encounters,
@@ -172,25 +163,19 @@ def build_prompt(
             except Exception as e:
                 logger.warning("Similar timeline failed %s: %s", n.patient.person_id, e)
                 continue
-            t = trunc_text(t, max_chars)
-            blocks.append(
-                f"Similar patient {n.patient.person_id} "
-                f"(timeline up to this patient's embed time {n.patient.embed_time}):\n{t}\n"
-                f"Ground-truth answer for this patient: {answer}"
-            )
+            neighbor_text = trunc_text(neighbor_text, max_chars)
+        blocks.append(
+            f"SIMILAR PATIENT INFORMATION:\n{neighbor_text}\nANSWER: {answer}"
+        )
 
-    prompt = header + query_block
-    if blocks:
-        suffix = (
-            "vignette similarity"
-            if context == "vignette"
-            else "vignette similarity; timelines truncated if long"
-        )
-        prompt += (
-            f"\n---\nSimilar patient exemplars (same task, retrieved by {suffix}):\n"
-            + "\n\n".join(blocks)
-        )
-    return prompt
+    if not blocks:
+        return f"{query_block}\n{question_block}"
+
+    similars_block = "\n\n".join(blocks)
+    # With-similars layout: query info -> question -> exemplars.
+    # Question follows the query directly so the model anchors on it before
+    # reading the (potentially long) similars block.
+    return f"{query_block}\n{question_block}\n{similars_block}"
 
 
 def run_llm(

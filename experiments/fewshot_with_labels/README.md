@@ -65,18 +65,93 @@ cp .env.example .env                  # then edit .env with your VAULT_SECRET_KE
 
 The scripts use plain `pathlib`/`open()`, so `gs://...` URIs don't work directly. The setup script copies data from GCS to local disk and writes a `.env` pointing at the local copies — you only paste the vault key afterward.
 
-```bash
-git clone <repo-url> && cd meds-mcp
+#### Creating the VM
 
-# Installs apt + uv, copies CSV and XML corpus from GCS to local disk,
-# generates .env with the correct local paths. One command.
+```bash
+export GOOGLE_CLOUD_PROJECT=som-nero-plevriti-deidbdf
+export GOOGLE_CLOUD_ZONE=us-west1-a
+export GOOGLE_HOST=bikia-pinnacle
+
+gcloud compute instances create "$GOOGLE_HOST" \
+  --project="$GOOGLE_CLOUD_PROJECT" \
+  --zone="$GOOGLE_CLOUD_ZONE" \
+  --machine-type=e2-standard-2 \
+  --network=default \
+  --image=debian-12-bookworm-v20260114 \
+  --image-project=debian-cloud \
+  --boot-disk-size=100GB \
+  --boot-disk-type=pd-balanced \
+  --scopes=cloud-platform \
+  --tags=iap-ssh
+```
+
+Key flags and why:
+- `--machine-type=e2-standard-2` — 2 vCPU / 8 GB RAM; leaves headroom for 40 BM25 indices + XML parsing. `e2-medium` (4 GB) is risky; `e2-standard-4` is comfortable if you later parallelize LLM calls.
+- `--boot-disk-size=100GB` — OS + uv env + 7.5 GB XML corpus + results fits well under 100 GB.
+- `--scopes=cloud-platform` — lets `gsutil` (run by `scripts/setup_vm.sh --copy-gcs`) read the source buckets without an interactive `gcloud auth` flow.
+- **No `--no-address`** — the VM needs outbound internet to reach Stanford's APIM endpoint (`apim.stanfordhealthcare.org`) and GitHub. If your security policy requires `--no-address`, configure Cloud NAT on the VPC and ask the secure-llm team to allowlist the NAT egress IP.
+- `--tags=iap-ssh` — lets you connect with `gcloud compute ssh <name> --tunnel-through-iap` without a public SSH port.
+
+SSH in:
+
+```bash
+gcloud compute ssh "$GOOGLE_HOST" --zone="$GOOGLE_CLOUD_ZONE" --tunnel-through-iap
+```
+
+#### First-time bootstrap on the VM
+
+Debian 12 minimal doesn't ship `git`, so the very first step is a one-line apt install. After that, `scripts/setup_vm.sh` handles everything else (including git on future runs). Note the `-o Acquire::ForceIPv4=true` — GCP default VPCs have no IPv6 route, and apt otherwise tries AAAA records first and fails with `Network is unreachable`.
+
+```bash
+# 1) Install git (one-line; only needed the very first time).
+#    ForceIPv4 works around GCP's no-IPv6-route default.
+sudo apt-get -o Acquire::ForceIPv4=true update
+sudo apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends git
+
+# 2) Clone over HTTPS (private repos: use a GitHub personal access token
+#    when prompted). SSH also works if you've added a VM key to GitHub —
+#    see the SSH note further down.
+git clone --single-branch --branch pinnacle \
+  https://github.com/VISTA-Stanford/meds-mcp.git
+cd meds-mcp
+
+# 3) Installs apt + uv, copies CSV and XML corpus from GCS to local disk,
+#    generates .env with the correct local paths. One command.
 bash scripts/setup_vm.sh --copy-gcs
 source ~/.bashrc
 
-# Paste VAULT_SECRET_KEY into the generated .env — only manual step.
+# 4) Paste VAULT_SECRET_KEY into the generated .env — only manual step.
 ${EDITOR:-nano} .env
 
+# 5) Install Python deps
 uv sync
+
+# 6) Sanity-check outbound reachability BEFORE the long precompute
+curl -I --connect-timeout 10 https://apim.stanfordhealthcare.org/
+curl -I --connect-timeout 5 https://storage.googleapis.com/
+```
+
+If either `curl` times out, fix networking before running any LLM-dependent step (see "Troubleshooting" further down).
+
+##### Skip the manual git install on new VMs
+
+Bake git installation into the VM's startup script so your very first SSH has it:
+
+```bash
+# Add this to your create command:
+--metadata=startup-script='#!/bin/bash
+apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl'
+```
+
+##### SSH clone (optional, for push access)
+
+HTTPS is fine for read-only clones. If you want to push from the VM, register an SSH key with GitHub:
+
+```bash
+ssh-keygen -t ed25519 -C "$GOOGLE_HOST" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+# Paste into https://github.com/settings/keys
+ssh -T git@github.com   # confirm
 ```
 
 **Auth:** `gsutil` (and the fallback gcsfuse) need read access to the source buckets. Either attach a service account with `storage.objectViewer` to the VM, or run `gcloud auth application-default login` first. Create the VM with `--scopes=cloud-platform` for the zero-config path.
@@ -283,3 +358,65 @@ Default: `experiments/fewshot_with_labels/outputs/` (or `$VISTA_OUTPUTS_DIR`). D
 - `TaskAwareRetriever.retrieve` asserts every returned neighbor has `split == "train"` (or whatever `--candidate-split` was set to) and `label not in drop_labels`.
 - BM25 is invariantly vignette↔vignette — comment at `run_experiment.py` call site and `task_retriever.py` module docstring both note this.
 - `CohortStore` rejects duplicate `(person_id, embed_time)` keys when constructed.
+
+---
+
+## Troubleshooting
+
+### `ConnectTimeout` / `Max retries exceeded` to `apim.stanfordhealthcare.org`
+
+The VM can't reach Stanford's secure-llm gateway. Usually one of:
+
+1. **VM created with `--no-address` and no Cloud NAT** — VM has no outbound internet at all. Either recreate without `--no-address`, or add Cloud NAT on the VPC.
+2. **VM's external IP isn't on Stanford's APIM allowlist** — get the IP (`curl -s https://api.ipify.org`) and ask the secure-llm team to allowlist it. Consider reserving a static external IP first so it doesn't change on reboot.
+3. **DNS misconfigured** — rare on GCP; test with `getent hosts apim.stanfordhealthcare.org`.
+
+Before kicking off any LLM-dependent step, verify with a one-line smoke test:
+
+```bash
+uv run python -c "
+from meds_mcp.server.llm import get_llm_client, get_default_generation_config
+c = get_llm_client('apim:gpt-4.1-mini')
+r = c.chat.completions.create(model='apim:gpt-4.1-mini',
+    messages=[{'role':'user','content':'say ok'}],
+    **get_default_generation_config({'temperature':0,'max_tokens':4}))
+print(r.choices[0].message.content)
+"
+```
+
+### `.env` contains literal `/home/USER/` placeholders
+
+You probably ran `cp .env.example .env` before `bash scripts/setup_vm.sh --copy-gcs`. The setup script now detects this and auto-regenerates (backing up to `.env.bak.<timestamp>` and preserving any `VAULT_SECRET_KEY` you pasted). Just rerun:
+
+```bash
+bash scripts/setup_vm.sh --copy-gcs
+```
+
+### `build_cohort.py` fails with `PermissionError: '/home/USER'`
+
+Same root cause as the placeholder issue above — `.env` points at `/home/USER/...` which doesn't exist. Fix with the rerun above.
+
+### `No ... patients with vignette` on the test pool
+
+Your `sample_pool.py` ran before `precompute_vignettes.py` finished. Rerun `sample_pool.py --split test --all --require-vignette --require-item` after precompute completes.
+
+### 47 states skipped as `empty_timeline`
+
+Expected — patients whose `embed_time` precedes their first XML event. Nothing to summarize. These are excluded from retrieval and from the eval pool automatically (via `--require-vignette`).
+
+### `apt-get install` fails with `Network is unreachable` / IPv6 errors
+
+The GCP default VPC has no IPv6 route, but apt tries AAAA records first. Force IPv4, either once:
+
+```bash
+sudo apt-get -o Acquire::ForceIPv4=true update
+sudo apt-get -o Acquire::ForceIPv4=true install -y <pkg>
+```
+
+or permanently (what `scripts/setup_vm.sh` does automatically):
+
+```bash
+echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+```
+
+If you still see `Network is unreachable` on IPv4 after that, the VM has no outbound internet at all — see the APIM/networking notes above (Cloud NAT, drop `--no-address`).

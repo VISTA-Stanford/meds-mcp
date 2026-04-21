@@ -63,6 +63,17 @@ install_apt() {
         warn "apt-get not found — skipping OS package install (not Debian/Ubuntu?)"
         return
     fi
+
+    # GCP VMs on default VPC have no IPv6 route, but apt resolves AAAA
+    # records for deb.debian.org first and hangs/fails. Persist an IPv4-only
+    # preference for apt so subsequent runs (and other users of the VM)
+    # don't hit the same issue.
+    local ipv4_conf=/etc/apt/apt.conf.d/99force-ipv4
+    if [[ ! -f "$ipv4_conf" ]]; then
+        log "pinning apt to IPv4 (creates $ipv4_conf)"
+        echo 'Acquire::ForceIPv4 "true";' | sudo tee "$ipv4_conf" >/dev/null
+    fi
+
     local missing=()
     for pkg in "${APT_PKGS[@]}"; do
         dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")

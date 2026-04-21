@@ -39,6 +39,7 @@ from experiments.fewshot_with_labels import _paths
 from experiments.fewshot_with_labels.run_experiment import (  # noqa: E402
     CONTEXT_CHOICES,
     SYSTEM_PROMPT,
+    WITH_SIMILARS,
     build_prompt,
     trunc_text,
 )
@@ -135,13 +136,20 @@ def main() -> None:
             pid, item.embed_time,
         )
 
-    retriever = TaskAwareRetriever(store, candidate_split=args.candidate_split)
-    neighbors = retriever.retrieve(
-        query_vignette=state.vignette,
-        task=item.task,
-        top_k=args.top_k,
-        exclude_pid=pid,
-    )
+    contexts = list(CONTEXT_CHOICES) if args.context == "all" else [args.context]
+
+    # Only build the BM25 retriever if at least one selected context actually
+    # shows similar patients. Baseline-only previews skip the 40-index build.
+    needs_similars = any(c in WITH_SIMILARS for c in contexts)
+    neighbors: list = []
+    if needs_similars:
+        retriever = TaskAwareRetriever(store, candidate_split=args.candidate_split)
+        neighbors = retriever.retrieve(
+            query_vignette=state.vignette,
+            task=item.task,
+            top_k=args.top_k,
+            exclude_pid=pid,
+        )
 
     base_generator = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
     query_timeline = trunc_text(
@@ -149,22 +157,23 @@ def main() -> None:
         args.max_chars,
     )
 
-    contexts = list(CONTEXT_CHOICES) if args.context == "all" else [args.context]
-
     print("=" * 80)
     print(f"Query patient  : {pid}")
     print(f"Split          : {state.split}")
     print(f"Embed time     : {item.embed_time}")
     print(f"Task           : {item.task}")
     print(f"Ground truth   : label={item.label} ({item.label_description})")
-    print(f"Retrieved top-{args.top_k} similars (train split, same task):")
-    for n in neighbors:
-        print(
-            f"  - {n.patient.person_id} @ {n.patient.embed_time} "
-            f"label={n.item.label} ({n.item.label_description}) score={n.score:.3f}"
-        )
-    if not neighbors:
-        print("  (none — retriever returned no candidates for this task)")
+    if needs_similars:
+        print(f"Retrieved top-{args.top_k} similars (train split, same task):")
+        for n in neighbors:
+            print(
+                f"  - {n.patient.person_id} @ {n.patient.embed_time} "
+                f"label={n.item.label} ({n.item.label_description}) score={n.score:.3f}"
+            )
+        if not neighbors:
+            print("  (none — retriever returned no candidates for this task)")
+    else:
+        print("Retrieval: skipped (only baseline_* contexts requested).")
     print("=" * 80)
 
     if args.show_system:
