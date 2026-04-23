@@ -264,13 +264,56 @@ uv run python experiments/fewshot_with_labels/build_cohort.py
 
 ### 2. Precompute vignettes (~8k LLM calls; resumable)
 
+Wall-clock is 2–7 hours depending on rate-limiting. Run it under `tmux` so a dropped SSH session doesn't kill the process.
+
 ```bash
-# Default: all events on/before embed_time (--n-encounters 0), USMLE-style prompt.
+# Install tmux if you're on a fresh VM (IPv4 forced — GCP default VPC has no IPv6 route).
+sudo apt-get -o Acquire::ForceIPv4=true install -y tmux
+
+# Start a named session and cd into the repo.
+tmux new -s precompute
+cd ~/meds-mcp
+
+# Load .env so VAULT_SECRET_KEY is in this shell's environment.
+# (Experiment scripts auto-load .env on import, but exporting it here
+# makes ad-hoc Python one-liners work too.)
+set -a && source .env && set +a
+
+# Kick off the precompute. `tee` mirrors output to a log file for grepping later.
+mkdir -p logs
 uv run python experiments/fewshot_with_labels/precompute_vignettes.py \
-  --model apim:gpt-4.1-mini
+  --model apim:gpt-4.1-mini 2>&1 | tee logs/precompute_$(date +%s).log
 ```
 
-Rerun the same command to resume after a crash; it skips states that already have a vignette. Add `--force` to regenerate all vignettes (e.g. after changing `configs/prompts/vignette_prompt.txt`). Use `--limit 30` for a small smoke test before the full run.
+Default behaviour: all events on/before `embed_time` (`--n-encounters 0`), USMLE-style prompt. Rerun the same command to resume after a crash — it skips states that already have a vignette. Add `--force` to regenerate all vignettes (e.g. after changing `configs/prompts/vignette_prompt.txt`). Use `--limit 30` for a small smoke test before the full run.
+
+**Useful tmux keys:**
+
+| Action | Keys |
+|---|---|
+| Detach and leave job running | `Ctrl-b` then `d` |
+| Reattach (after SSH reconnect) | `tmux attach -t precompute` |
+| Scroll back through output | `Ctrl-b [`, arrow keys / PgUp, `q` to exit |
+| List sessions | `tmux ls` |
+| Split window vertically / horizontally | `Ctrl-b "` / `Ctrl-b %` |
+| Switch between panes | `Ctrl-b o` |
+| Kill the session | `tmux kill-session -t precompute` |
+
+**Monitor progress from a split pane:**
+
+```bash
+# After Ctrl-b " in tmux:
+watch -n 5 'free -h; df -h / | tail -1; echo; \
+  wc -l $HOME/results/fewshot_with_labels_outputs/patients.jsonl'
+```
+
+**Grep the log for skip reasons once finished:**
+
+```bash
+grep -E "Timeline extract failed|Empty timeline|Vignette LLM failed" logs/precompute_*.log
+```
+
+The same `tmux new -s <name>` pattern works for steps 4 and 5 (the LLM-bound runs); just pick a different session name per run.
 
 ### 3. Sample the evaluation pool
 
