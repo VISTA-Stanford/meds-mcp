@@ -43,6 +43,10 @@ from experiments.fewshot_with_labels.run_experiment import (  # noqa: E402
     build_prompt,
     trunc_text,
 )
+from experiments.fewshot_with_labels._tokens import (  # noqa: E402
+    count_tokens,
+    effective_input_budget,
+)
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -88,6 +92,18 @@ def main() -> None:
         help="Keep only the last N encounters before embed_time. 0 = all (default).",
     )
     parser.add_argument("--max-chars", type=int, default=120_000)
+    parser.add_argument(
+        "--max-prompt-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Progressive-trim cap, same as run_experiment.py. None = auto "
+            "(model_context - max_output - safety_margin), 0 = disabled."
+        ),
+    )
+    parser.add_argument("--model-context-tokens", type=int, default=120000)
+    parser.add_argument("--max-output-tokens", type=int, default=8)
+    parser.add_argument("--token-safety-margin", type=int, default=2048)
     parser.add_argument("--candidate-split", type=str, default="train")
     parser.add_argument(
         "--show-system",
@@ -180,8 +196,23 @@ def main() -> None:
         print("\n[SYSTEM]")
         print(SYSTEM_PROMPT)
 
+    # Resolve --max-prompt-tokens the same way run_experiment.py does.
+    system_tokens = count_tokens(SYSTEM_PROMPT)
+    if args.max_prompt_tokens is None:
+        auto_budget = effective_input_budget(
+            model_context_tokens=args.model_context_tokens,
+            max_output_tokens=args.max_output_tokens,
+            safety_margin=args.token_safety_margin,
+            system_tokens=system_tokens,
+        )
+        prompt_cap_total = auto_budget + system_tokens
+    elif args.max_prompt_tokens == 0:
+        prompt_cap_total = None
+    else:
+        prompt_cap_total = args.max_prompt_tokens
+
     for ctx in contexts:
-        prompt = build_prompt(
+        render = build_prompt(
             context=ctx,
             query_pid=pid,
             query_embed_time=item.embed_time,
@@ -193,11 +224,31 @@ def main() -> None:
             base_generator=base_generator,
             n_encounters=args.n_encounters,
             max_chars=args.max_chars,
+            max_prompt_tokens=prompt_cap_total,
+            system_tokens=system_tokens,
         )
         print("\n" + "#" * 80)
-        print(f"### --context {ctx}   ({len(prompt)} chars)")
+        cap_str = (
+            f"cap={prompt_cap_total}"
+            if prompt_cap_total is not None
+            else "cap=disabled"
+        )
+        print(
+            f"### --context {ctx}   "
+            f"({len(render.prompt)} chars, "
+            f"tokens={render.tokens_total}, "
+            f"system_tokens={system_tokens}, "
+            f"before_trim={render.tokens_before_trim}, {cap_str})"
+        )
+        if render.neighbors_dropped_ids:
+            print(
+                f"    Neighbors dropped: {render.neighbors_dropped_ids}  "
+                f"({len(render.neighbors_dropped_ids)} of {len(neighbors)})"
+            )
+        if render.query_truncated:
+            print("    Query block was head+tail-truncated to fit the cap.")
         print("#" * 80)
-        print(prompt)
+        print(render.prompt)
 
 
 if __name__ == "__main__":

@@ -340,24 +340,26 @@ uv run python experiments/fewshot_with_labels/sample_pool.py \
 POOL=experiments/fewshot_with_labels/outputs/pool_test_all.json
 QSPLIT=test
 
+# Baselines: no similars in the prompt → --top-k is not used.
 uv run python experiments/fewshot_with_labels/run_experiment.py \
   --context baseline_vignette --pool $POOL --query-split $QSPLIT \
-  --top-k 3 --model apim:gpt-4.1-mini
-
-uv run python experiments/fewshot_with_labels/run_experiment.py \
-  --context vignette          --pool $POOL --query-split $QSPLIT \
-  --top-k 3 --model apim:gpt-4.1-mini
+  --model apim:gpt-4.1-mini
 
 uv run python experiments/fewshot_with_labels/run_experiment.py \
   --context baseline_timeline --pool $POOL --query-split $QSPLIT \
+  --model apim:gpt-4.1-mini
+
+# With-similars variants: --top-k controls how many exemplars are injected.
+uv run python experiments/fewshot_with_labels/run_experiment.py \
+  --context vignette --pool $POOL --query-split $QSPLIT \
   --top-k 3 --model apim:gpt-4.1-mini
 
 uv run python experiments/fewshot_with_labels/run_experiment.py \
-  --context timeline          --pool $POOL --query-split $QSPLIT \
+  --context timeline --pool $POOL --query-split $QSPLIT \
   --top-k 3 --model apim:gpt-4.1-mini
 ```
 
-The scripts skip the BM25 build entirely for `baseline_*` variants (no similars shown → no retrieval). Each `--context` writes its own `experiment_results_<context>.jsonl` and can be rerun independently.
+The scripts skip the BM25 build entirely for `baseline_*` variants (no similars shown → no retrieval). If you do pass `--top-k` on a baseline context, the script logs a warning and ignores it; `top_k` is recorded as `null` in the result rows so the metadata honestly reflects "no retrieval happened". Each `--context` writes its own `experiment_results_<context>.jsonl` and can be rerun independently.
 
 ### 5. Aggregate + compare to ground truth
 
@@ -408,8 +410,8 @@ Default: `experiments/fewshot_with_labels/outputs/` (or `$VISTA_OUTPUTS_DIR`). D
 | `items.jsonl` | 1 | `LabeledItem` per `(person_id, task)` after dropping `label=-1` |
 | `pool_<split>_<tag>.json` | 3 | Sampled evaluation pool (sorted list of person_ids) |
 | `pool_<split>_<tag>_manifest.json` | 3 | Sampling config (split, seed, sizes, whether `--all` was used) |
-| `experiment_results_<context>.jsonl` | 4 | One row per (pid, task): context, pred, raw, label, similars, model/seed/temperature |
-| `experiment_meta_<context>.json` | 4 | Run settings |
+| `experiment_results_<context>.jsonl` | 4 | One row per (pid, task): context, pred, raw, label, similars, model/seed/temperature, per-row prompt token counts (`prompt_tokens_system` / `_user` / `_total`) |
+| `experiment_meta_<context>.json` | 4 | Run settings + aggregate prompt-token stats under `prompt_token_stats` (`user_tokens` and `total_tokens` each include `n / min / max / mean / median / p10 / p90 / total`) |
 | `analysis_summary.json` | 5 | Per-variant accuracy, per-task matrix, paired flip/fix/hurt |
 | `per_task_accuracy.csv` | 5 | Flat per-task × per-variant table for spreadsheets |
 
@@ -426,10 +428,18 @@ Default: `experiments/fewshot_with_labels/outputs/` (or `$VISTA_OUTPUTS_DIR`). D
 - `--patients` / `--items` — cohort JSONLs (defaults honor env vars).
 - `--corpus-dir` (default: `VISTA_CORPUS_DIR`) — XML directory.
 - `--n-encounters` (default: **0** = all events on/before `embed_time`).
+- `--max-input-tokens` (default: **65536**) — cap the linearized timeline at this many tokens (`cl100k_base`) before sending it to the summarizer. Oversized timelines are head+tail-truncated with an explicit `[truncated]` marker. Set to `0` to disable truncation. Default is a generous middle ground — most real oncology trajectories fit without truncation, but pathologically long patients (5K+ encounters) are truncated just under the budget instead of crashing APIM with a context-overflow empty body.
+- `--model-context-tokens` (default: **120000**) — advertised model context window. Used (a) to validate `--max-input-tokens` at startup (the script errors out if you pass a value > the effective input budget) and (b) logged in the run meta. `120000` is the observed-safe value for `apim:gpt-4.1-mini`; nominal is 128K but APIM deployments typically reserve ~2–4K for wrapper overhead.
+- `--max-output-tokens` (default: **1024**) — max tokens the summarizer may generate. Subtracted from the context window to derive the effective input budget. Keep aligned with the summarizer's `generation_overrides.max_tokens`.
+- `--token-safety-margin` (default: **2048**) — extra buffer reserved on top of `--max-output-tokens` (covers the system prompt + `cl100k_base`-vs-`o200k_base` tokenizer drift).
+- `--max-retries` (default: **3**) — per-patient retries on LLM errors (transient APIM timeouts, rate limits). Total attempts = `max_retries + 1`. Exponential backoff.
+- `--retry-backoff-seconds` (default: **2**) — base sleep between retries; doubles each attempt.
 - `--model` (default: `apim:gpt-4.1-mini`).
 - `--limit N` — process only N states (smoke).
 - `--force` — regenerate even if vignette already present.
 - `--no-progress` — disable tqdm.
+
+On success, each written `PatientState` now records a `vignette_input_was_truncated: bool` flag so you can target only truncated patients for re-analysis later without re-summarizing the full cohort.
 
 ### `sample_pool.py`
 - `--split` (default `valid`).
@@ -441,11 +451,16 @@ Default: `experiments/fewshot_with_labels/outputs/` (or `$VISTA_OUTPUTS_DIR`). D
 - `--context {baseline_vignette,baseline_timeline,vignette,timeline}` *(required)*.
 - `--pool` — JSON list of pids (produced by step 3).
 - `--query-split` (default `valid`) / `--candidate-split` (default `train`).
-- `--top-k` (default 3) — similar patients injected into the prompt.
+- `--top-k` (default 3) — similar patients injected into the prompt. **Ignored for `baseline_*` contexts** (a warning is logged if you pass it anyway, and `top_k` is recorded as `null` in the output).
 - `--n` — process only first N pids in the pool (debug).
 - `--n-encounters` (default 0) — capacity on timeline context blocks.
-- `--max-chars` (default 120_000) — per-block timeline truncation.
+- `--max-chars` (default 120_000) — per-block timeline truncation (character-level; belt-and-suspenders alongside the token-level cap).
+- `--max-prompt-tokens` (default: **auto** from model context) — token-level cap on the rendered user prompt (plus system prompt). When the candidate prompt exceeds this, progressive trim runs: (1) drop the largest neighbor block, repeat until under budget; (2) if still over, head+tail-truncate the query block. Pass `0` to disable. Auto-default is `effective_input_budget(model_context, max_output, safety_margin, system_tokens)` ≈ 116900 for `apim:gpt-4.1-mini`.
+- `--model-context-tokens` (default **120000**), `--max-output-tokens` (default **8**), `--token-safety-margin` (default **2048**) — same semantics as precompute; used to compute the auto `--max-prompt-tokens`. `max-output-tokens` is 8 here (Yes/No only) rather than 1024 (full vignette).
+- `--llm-retries` (default **1**) — one-shot retry on LLM exceptions. No input mutation. Protects against transient APIM blips without inflating `n_skipped_rows`.
 - `--model`, `--seed`, `--temperature`, `--delay-seconds`.
+
+Every result row now records `prompt_tokens_before_trim`, `neighbors_dropped_count`, `neighbors_dropped_ids`, and `query_truncated`. The run meta file adds a `prompt_trim_stats` block aggregating those counts across rows.
 
 ### `analyze_results.py`
 - `--input-dir` / `--output-dir` (defaults: `VISTA_OUTPUTS_DIR`).
@@ -504,7 +519,16 @@ Your `sample_pool.py` ran before `precompute_vignettes.py` finished. Rerun `samp
 
 ### 47 states skipped as `empty_timeline`
 
-Expected — patients whose `embed_time` precedes their first XML event. Nothing to summarize. These are excluded from retrieval and from the eval pool automatically (via `--require-vignette`).
+Expected — patients whose `embed_time` precedes their first XML event. Nothing to summarize. These are excluded from retrieval and from the eval pool automatically (via `--require-vignette`). Run `scripts/diag_embed_before_xml.py` for an exact count of these on your cohort.
+
+### Many `Vignette LLM failed: Expecting value: line 1 column 1 (char 0)`
+
+That's APIM returning an empty response body — the secure-llm client then fails parsing it as JSON. This is prevented proactively by the new token-budget flags:
+
+- `precompute_vignettes.py` validates `--max-input-tokens` against the effective input budget derived from `--model-context-tokens` / `--max-output-tokens` / `--token-safety-margin` at startup and errors out if it would exceed the model's context. The default `--max-input-tokens=65536` leaves ample headroom on `apim:gpt-4.1-mini`.
+- `run_experiment.py` applies an auto `--max-prompt-tokens` (also derived from the same budget) and progressively trims when a specific prompt exceeds it (drops the largest neighbor first; finally head+tail-truncates the query block).
+
+If you still see this error, either (a) you explicitly lowered `--max-prompt-tokens` / raised input past the model's actual limit, or (b) the secure-llm connection itself is failing. Verify APIM reachability (`curl -I https://apim.stanfordhealthcare.org/`) and re-run. The existing retry-with-backoff in `precompute_vignettes.py` and the one-shot retry in `run_experiment.py` recover from transient blips automatically.
 
 ### `apt-get install` fails with `Network is unreachable` / IPv6 errors
 

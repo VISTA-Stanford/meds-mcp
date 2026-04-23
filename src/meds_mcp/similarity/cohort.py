@@ -52,6 +52,12 @@ class PatientState:
     split: str
     vignette: str
     created_at: str
+    # True iff the linearized timeline was head+tail-truncated before being
+    # sent to the vignette summarizer. Lets downstream callers target only
+    # the truncated rows for re-analysis without re-summarizing the full
+    # cohort. Default False; loaded from existing patients.jsonl without
+    # breakage.
+    vignette_input_was_truncated: bool = False
 
     @property
     def key(self) -> StateKey:
@@ -65,6 +71,7 @@ class PatientState:
             split=str(d.get("split", "") or ""),
             vignette=str(d.get("vignette", "") or ""),
             created_at=str(d.get("created_at", "") or ""),
+            vignette_input_was_truncated=bool(d.get("vignette_input_was_truncated", False)),
         )
 
     def to_dict(self) -> Dict[str, Any]:
