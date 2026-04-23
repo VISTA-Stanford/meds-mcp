@@ -31,6 +31,7 @@ from meds_mcp.similarity import (
     CohortStore,
     DeterministicTimelineLinearizationGenerator,
     TaskAwareRetriever,
+    demographics_block,
 )
 from experiments.fewshot_with_labels import _paths
 
@@ -172,6 +173,14 @@ def main() -> None:
         base_generator.generate(pid, cutoff_date=item.embed_time),
         args.max_chars,
     )
+    # Match run_experiment's demographics prelude for timeline contexts.
+    demos = demographics_block(
+        xml_dir=str(args.corpus_dir),
+        patient_id=pid,
+        cutoff_date=item.embed_time,
+    )
+    if demos:
+        query_timeline = demos + "\n" + query_timeline
 
     print("=" * 80)
     print(f"Query patient  : {pid}")
@@ -226,6 +235,7 @@ def main() -> None:
             max_chars=args.max_chars,
             max_prompt_tokens=prompt_cap_total,
             system_tokens=system_tokens,
+            xml_dir=str(args.corpus_dir),
         )
         print("\n" + "#" * 80)
         cap_str = (

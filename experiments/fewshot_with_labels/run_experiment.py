@@ -49,6 +49,7 @@ from meds_mcp.similarity import (
     DeterministicTimelineLinearizationGenerator,
     SimilarNeighbor,
     TaskAwareRetriever,
+    demographics_block,
 )
 from experiments.fewshot_with_labels import _paths
 from experiments.fewshot_with_labels._tokens import (
@@ -140,6 +141,7 @@ def _render_neighbor_block(
     base_generator: DeterministicTimelineLinearizationGenerator,
     n_encounters: int,
     max_chars: int,
+    xml_dir: Optional[str] = None,
 ) -> Optional[str]:
     """Render a single similar-patient block. Returns None if rendering fails
     (e.g. missing XML) — caller should skip that neighbor."""
@@ -157,6 +159,15 @@ def _render_neighbor_block(
             logger.warning("Similar timeline failed %s: %s", neighbor.patient.person_id, e)
             return None
         neighbor_text = trunc_text(neighbor_text, max_chars)
+        # Prepend demographics so the LLM sees age/sex for the neighbor too.
+        if xml_dir:
+            demos = demographics_block(
+                xml_dir=xml_dir,
+                patient_id=neighbor.patient.person_id,
+                cutoff_date=neighbor.patient.embed_time,
+            )
+            if demos:
+                neighbor_text = demos + "\n" + neighbor_text
     else:
         raise ValueError(f"Unknown context for neighbor rendering: {context!r}")
     return f"SIMILAR PATIENT INFORMATION:\n{neighbor_text}\nANSWER: {answer}"
@@ -186,6 +197,7 @@ def build_prompt(
     max_chars: int,
     max_prompt_tokens: Optional[int] = None,
     system_tokens: int = 0,
+    xml_dir: Optional[str] = None,
 ) -> PromptRenderResult:
     """Render the user prompt for one (query_pid, task) row.
 
@@ -225,6 +237,7 @@ def build_prompt(
                 base_generator=base_generator,
                 n_encounters=n_encounters,
                 max_chars=max_chars,
+                xml_dir=xml_dir,
             )
             if block is None:
                 continue
@@ -595,9 +608,20 @@ def main() -> None:
 
                 if context in QUERY_AS_TIMELINE and et not in timeline_by_et:
                     try:
-                        timeline_by_et[et] = trunc_text(
+                        raw_timeline = trunc_text(
                             base_generator.generate(pid, cutoff_date=et),
                             args.max_chars,
+                        )
+                        # Prepend deterministic demographics (age at prediction
+                        # time, sex, race, ethnicity) so the Yes/No model sees
+                        # them even when the raw event stream omits them.
+                        demos = demographics_block(
+                            xml_dir=str(args.corpus_dir),
+                            patient_id=pid,
+                            cutoff_date=et,
+                        )
+                        timeline_by_et[et] = (
+                            (demos + "\n" + raw_timeline) if demos else raw_timeline
                         )
                     except Exception as e:
                         logger.warning("Query timeline failed %s@%s: %s", pid, et, e)
@@ -635,6 +659,7 @@ def main() -> None:
                     max_chars=args.max_chars,
                     max_prompt_tokens=prompt_cap_total,
                     system_tokens=system_tokens,
+                    xml_dir=str(args.corpus_dir),
                 )
                 prompt = render.prompt
 

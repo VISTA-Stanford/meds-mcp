@@ -32,7 +32,11 @@ for _p in (_REPO_ROOT / "src", _REPO_ROOT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from meds_mcp.similarity import CohortStore, PatientSimilarityPipeline
+from meds_mcp.similarity import (
+    CohortStore,
+    PatientSimilarityPipeline,
+    demographics_block,
+)
 from experiments.fewshot_with_labels import _paths
 from experiments.fewshot_with_labels._tokens import (
     count_tokens,
@@ -288,6 +292,17 @@ def main() -> None:
                     "Truncated %s@%s: %d tokens -> %d",
                     p.person_id, p.embed_time, orig_tokens, args.max_input_tokens,
                 )
+
+        # Prepend a deterministic demographics block so the LLM can open with
+        # an exact USMLE-style "A N-year-old <sex>…" instead of interpolating
+        # vague terms like "middle-aged" when age isn't an explicit event.
+        demos = demographics_block(
+            xml_dir=str(args.corpus_dir),
+            patient_id=p.person_id,
+            cutoff_date=p.embed_time,
+        )
+        if demos:
+            text = demos + "\n" + text
 
         vignette, attempts_used = _summarize_with_retry(text, p.person_id, p.embed_time)
         n_retries_used += attempts_used

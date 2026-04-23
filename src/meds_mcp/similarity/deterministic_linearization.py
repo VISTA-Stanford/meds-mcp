@@ -75,6 +75,132 @@ def normalize_cutoff_datetime(cutoff: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+_MISSING_CONCEPT_MARKERS = {
+    "no matching concept",
+    "unknown",
+    "none",
+    "",
+}
+
+
+def _clean_demographic_value(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.lower() in _MISSING_CONCEPT_MARKERS:
+        return None
+    return s
+
+
+def _parse_birthdate(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).strip())
+    except ValueError:
+        return None
+
+
+def _age_years(birthdate: datetime, at: datetime) -> Optional[int]:
+    if birthdate > at:
+        return None
+    yrs = at.year - birthdate.year
+    if (at.month, at.day) < (birthdate.month, birthdate.day):
+        yrs -= 1
+    return yrs if yrs >= 0 else None
+
+
+def demographics_block(
+    xml_dir: str,
+    patient_id: str,
+    cutoff_date: Optional[str] = None,
+) -> str:
+    """Deterministic demographic prelude for a patient.
+
+    Reads ``<person><birthdate>`` and ``<person><demographics>`` from the
+    patient's XML and computes age at ``cutoff_date`` (if provided, else uses
+    the latest entry timestamp; falls back to the `<age><years>` value if
+    birthdate is missing).
+
+    Returns a short, well-labelled block that the LLM summarizer can quote
+    verbatim for the opening sentence:
+
+        PATIENT DEMOGRAPHICS AT PREDICTION TIME:
+        Age: 58 years
+        Sex: female
+        Race: Asian
+        Ethnicity: Not Hispanic or Latino
+
+    Unknown / "No matching concept" fields are silently omitted. Returns an
+    empty string if the ``<person>`` block is missing entirely.
+    """
+    path = Path(xml_dir) / f"{patient_id}.xml"
+    if not path.exists():
+        return ""
+
+    try:
+        root = etree.parse(str(path)).getroot()
+    except Exception:
+        return ""
+
+    person = root.find(".//person")
+    if person is None:
+        return ""
+
+    # --- age ---
+    age_years: Optional[int] = None
+    birth = _parse_birthdate(person.findtext("birthdate"))
+    if birth is not None:
+        cutoff_dt = (
+            normalize_cutoff_datetime(cutoff_date) if cutoff_date else None
+        )
+        if cutoff_dt is None:
+            # Fallback: latest entry timestamp in the file.
+            tss = [
+                _parse_entry_ts(e.attrib.get("timestamp", ""))
+                for e in root.iter("entry")
+            ]
+            tss = [t for t in tss if t is not None]
+            cutoff_dt = max(tss) if tss else None
+        if cutoff_dt is not None:
+            age_years = _age_years(birth, cutoff_dt)
+        # If we have a birthdate and cutoff but age is None (cutoff predates
+        # birth, or some other anomaly), LEAVE age_years as None — do not
+        # fall through to the XML-embedded <age> which is the patient's
+        # present-day age and would be wrong for a historical prediction time.
+    else:
+        # Only use the XML-embedded age when birthdate is missing entirely.
+        raw_years = person.findtext(".//age/years")
+        try:
+            age_years = int(str(raw_years).strip()) if raw_years else None
+        except ValueError:
+            age_years = None
+
+    sex = _clean_demographic_value(person.findtext(".//gender"))
+    if sex is not None:
+        sex = sex.lower()  # "female"/"male"
+    race = _clean_demographic_value(person.findtext(".//race"))
+    ethnicity = _clean_demographic_value(person.findtext(".//ethnicity"))
+
+    lines: list[str] = ["PATIENT DEMOGRAPHICS AT PREDICTION TIME:"]
+    if age_years is not None:
+        lines.append(f"Age: {age_years} years")
+    if sex:
+        lines.append(f"Sex: {sex}")
+    if race:
+        lines.append(f"Race: {race}")
+    if ethnicity:
+        lines.append(f"Ethnicity: {ethnicity}")
+
+    # If we only have the header and nothing else, return an empty string
+    # so the caller knows there's nothing usable.
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
 class DeterministicTimelineLinearizationGenerator(BaseVignetteGenerator):
     """Deterministic timeline linearizer that emits ordered event rows.
 

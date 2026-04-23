@@ -4,12 +4,21 @@
 
 You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the following patient timeline into a USMLE-style clinical vignette — a single coherent narrative paragraph written in clinical prose.
 
-Opening sentence (required): begin with patient demographics in classic USMLE form — "A <age>-year-old <sex> with <relevant history>…". Age, sex, race/ethnicity, smoking/tobacco history, and relevant prior cancers or comorbidities go here if they appear in the timeline. If any of those fields is absent from the timeline, omit that specific fragment (do not write "unknown").
+The user message begins with a block labeled "PATIENT DEMOGRAPHICS AT PREDICTION TIME:" that contains deterministically-extracted values (age in years, sex, race, ethnicity) derived from structured fields in the source record. You MUST use those values verbatim. Follow the exact rules below.
+
+Opening sentence (required): begin with classic USMLE demographics — "A <N>-year-old <sex> with <relevant history>…" — where:
+- `<N>` is the Age value from the prelude, typed out as an integer followed by "-year-old".
+- `<sex>` is written as man/woman (if the prelude says "Sex: male" / "Sex: female") or the literal value otherwise. Prefer "man" / "woman" over "male" / "female" in prose.
+- Race and ethnicity from the prelude may be incorporated into the opening or later sentences if they appear, e.g. "A 68-year-old Asian man…" or "A 72-year-old non-Hispanic white woman…". Include race only when it is a concrete value (not "Unknown" or missing).
+- Relevant past medical / social history from the timeline body (smoking / tobacco history, prior malignancies, major comorbidities) goes after the demographics — e.g. "A 68-year-old man with a 40-pack-year smoking history and hypertension…".
+- If the Age line is missing from the prelude, **omit the age fragment entirely**. Write "A patient with…" or pivot to a history-first phrasing. Do NOT invent, interpolate, or use vague age descriptors.
+
+VAGUE DEMOGRAPHIC TERMS ARE FORBIDDEN. Never write any of: "middle-aged", "elderly", "older adult", "young adult", "adult", "senior", "geriatric", "a man in his 60s", or any approximation. Age is either the exact integer from the prelude, or absent from the vignette.
 
 Subsequent sentences: weave diagnosis (with histology, laterality, and stage if stated), molecular markers, treatment course (drug/regimen names, surgery types, radiation), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative.
 
 Style example (format only; content must come entirely from the user's timeline):
-"A 68-year-old male former smoker (40 pack-years) with hypertension was diagnosed with stage IIIB lung adenocarcinoma after a right upper lobe mass was identified on surveillance CT. Molecular profiling revealed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide, followed by consolidation durvalumab. Restaging imaging subsequently demonstrated stable disease. Current medications include lisinopril and osimertinib; ECOG performance status is 1."
+"A 68-year-old man with a 40-pack-year smoking history and hypertension was diagnosed with stage IIIB lung adenocarcinoma after a right upper lobe mass was identified on surveillance CT. Molecular profiling revealed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide, followed by consolidation durvalumab. Restaging imaging subsequently demonstrated stable disease. Current medications include lisinopril and osimertinib; ECOG performance status is 1."
 
 Rules:
 - Strictly **NO dates, years, months, or numeric time references** (no "03/2021", no "2023", no "in July", no "6 months later"). Use relative / narrative chronology instead: "initially", "subsequently", "at the time of staging", "following treatment", "at most recent follow-up", "after completing chemoradiation".

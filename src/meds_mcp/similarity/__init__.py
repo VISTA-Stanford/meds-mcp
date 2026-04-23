@@ -2,7 +2,10 @@
 
 from .bm25_retrieval import PatientBM25Index, SimilarPatient
 from .cohort import CohortItem, CohortStore, LabeledItem, PatientState, utc_now_iso
-from .deterministic_linearization import DeterministicTimelineLinearizationGenerator
+from .deterministic_linearization import (
+    DeterministicTimelineLinearizationGenerator,
+    demographics_block,
+)
 from .llm_secure_adapter import SecureLLMSummarizer
 from .pipeline import (
     PatientRecord,
@@ -18,6 +21,7 @@ __all__ = [
     "CohortItem",
     "CohortStore",
     "DeterministicTimelineLinearizationGenerator",
+    "demographics_block",
     "LabeledItem",
     "LLMVignetteGenerator",
     "PatientBM25Index",
