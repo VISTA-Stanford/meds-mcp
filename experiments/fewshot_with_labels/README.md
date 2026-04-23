@@ -67,36 +67,79 @@ The scripts use plain `pathlib`/`open()`, so `gs://...` URIs don't work directly
 
 #### Creating the VM
 
-```bash
-export GOOGLE_CLOUD_PROJECT=som-nero-plevriti-deidbdf
-export GOOGLE_CLOUD_ZONE=us-west1-a
-export GOOGLE_HOST=bikia-pinnacle
+Create the VM on Stanford's allowlisted `shc-som-secure-gpt-<region>` subnet. That subnet handles egress to `apim.stanfordhealthcare.org` upstream, so the VM can safely use `--no-address` (no external IP) and still reach APIM, GitHub, and GCS.
 
+```bash
+# --- variables -------------------------------------------------------------
+export GOOGLE_CLOUD_PROJECT=som-nero-plevriti-deidbdf
+export GOOGLE_CLOUD_LOCATION=us-west1-a
+
+# SHC_GCP_NETWORK strips the trailing zone letter (-a) so that us-west1-a
+# maps to subnet `shc-som-secure-gpt-us-west1` (no "-a" suffix).
+export SHC_GCP_NETWORK=$(echo shc-som-secure-gpt-$GOOGLE_CLOUD_LOCATION | sed 's/-[^-]*$//')
+
+export GOOGLE_HOST=bikia-pinnacle-e2   # name of your new VM
+
+# --- create ----------------------------------------------------------------
 gcloud compute instances create "$GOOGLE_HOST" \
   --project="$GOOGLE_CLOUD_PROJECT" \
-  --zone="$GOOGLE_CLOUD_ZONE" \
+  --zone="$GOOGLE_CLOUD_LOCATION" \
   --machine-type=e2-standard-2 \
   --network=default \
+  --subnet="$SHC_GCP_NETWORK" \
+  --no-address \
   --image=debian-12-bookworm-v20260114 \
   --image-project=debian-cloud \
-  --boot-disk-size=100GB \
+  --boot-disk-size=50GB \
   --boot-disk-type=pd-balanced \
   --scopes=cloud-platform \
   --tags=iap-ssh
 ```
 
 Key flags and why:
-- `--machine-type=e2-standard-2` — 2 vCPU / 8 GB RAM; leaves headroom for 40 BM25 indices + XML parsing. `e2-medium` (4 GB) is risky; `e2-standard-4` is comfortable if you later parallelize LLM calls.
-- `--boot-disk-size=100GB` — OS + uv env + 7.5 GB XML corpus + results fits well under 100 GB.
+- `--subnet=$SHC_GCP_NETWORK` — Stanford's `shc-som-secure-gpt-us-west1` subnet is allowlisted on APIM. Without it, LLM calls time out (`ConnectTimeout to apim.stanfordhealthcare.org`).
+- `--no-address` — required on this subnet; egress routing is handled upstream by Stanford, not via a VM-level external IP.
+- `--machine-type=e2-standard-2` — 2 vCPU / 8 GB RAM; leaves headroom for 40 BM25 indices + XML parsing. `e2-medium` (4 GB) OOMs intermittently; `e2-standard-4` is comfortable once you parallelize LLM calls.
+- `--boot-disk-size=50GB` — corpus (~7.5 GB) + uv env + deps + outputs fits; 10 GB is **not** enough. You'll see a harmless "Disk size larger than image" warning on create; Debian 12 auto-resizes the root partition on first boot.
 - `--scopes=cloud-platform` — lets `gsutil` (run by `scripts/setup_vm.sh --copy-gcs`) read the source buckets without an interactive `gcloud auth` flow.
-- **No `--no-address`** — the VM needs outbound internet to reach Stanford's APIM endpoint (`apim.stanfordhealthcare.org`) and GitHub. If your security policy requires `--no-address`, configure Cloud NAT on the VPC and ask the secure-llm team to allowlist the NAT egress IP.
 - `--tags=iap-ssh` — lets you connect with `gcloud compute ssh <name> --tunnel-through-iap` without a public SSH port.
 
-SSH in:
+Verify the VM landed on the right subnet with no external IP:
 
 ```bash
-gcloud compute ssh "$GOOGLE_HOST" --zone="$GOOGLE_CLOUD_ZONE" --tunnel-through-iap
+gcloud compute instances describe "$GOOGLE_HOST" \
+  --project="$GOOGLE_CLOUD_PROJECT" --zone="$GOOGLE_CLOUD_LOCATION" \
+  --format="get(networkInterfaces[0].subnetwork,networkInterfaces[0].accessConfigs)"
+# Expected: subnetwork URI ends in /shc-som-secure-gpt-us-west1
+#           accessConfigs is empty ([])
 ```
+
+SSH in via IAP tunnel:
+
+```bash
+gcloud compute ssh "$GOOGLE_HOST" \
+  --project="$GOOGLE_CLOUD_PROJECT" \
+  --zone="$GOOGLE_CLOUD_LOCATION" \
+  --tunnel-through-iap
+```
+
+Once you get a shell prompt on the VM, sanity-check that the subnet's egress is working **before** running anything LLM-dependent:
+
+```bash
+# APIM reachable? A 404 here is success — it means the hostname resolves and
+# TLS handshake works; only the root path doesn't exist as an endpoint.
+curl -4 -I --connect-timeout 10 https://apim.stanfordhealthcare.org/
+
+# GCS + GitHub (needed for setup_vm.sh --copy-gcs)
+curl -4 -I --connect-timeout 10 https://storage.googleapis.com/
+curl -4 -I --connect-timeout 10 https://github.com/
+```
+
+All three must return HTTP headers (any 2xx/3xx/4xx is fine; timeouts are not). If APIM times out, contact the secure-gpt team — this VM's subnet egress or service account may need allowlisting.
+
+#### Why `--no-address` here (vs a VM with an external IP)
+
+On **this specific Stanford subnet**, outbound traffic is NAT'd through Stanford's infrastructure and Stanford's allowlisted egress IP reaches APIM. A VM with its own external IP (no SHC subnet) would use a random GCP egress IP that is **not** on APIM's allowlist, so LLM calls would fail with `ConnectTimeout`. Use the subnet; skip the external IP.
 
 #### First-time bootstrap on the VM
 
@@ -153,6 +196,22 @@ cat ~/.ssh/id_ed25519.pub
 # Paste into https://github.com/settings/keys
 ssh -T git@github.com   # confirm
 ```
+
+**If `ssh -T git@github.com` hangs or says "Network is unreachable":** the SHC subnet likely blocks outbound TCP/22 (only 443 egress is allowed). Use GitHub's SSH-over-443 endpoint:
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+EOF
+chmod 600 ~/.ssh/config
+ssh -T git@github.com   # should now say "Hi <your-username>!…"
+```
+
+After that, `git@github.com:...` URLs route over 443 transparently and work from the SHC subnet.
 
 **Auth:** `gsutil` (and the fallback gcsfuse) need read access to the source buckets. Either attach a service account with `storage.objectViewer` to the VM, or run `gcloud auth application-default login` first. Create the VM with `--scopes=cloud-platform` for the zero-config path.
 
