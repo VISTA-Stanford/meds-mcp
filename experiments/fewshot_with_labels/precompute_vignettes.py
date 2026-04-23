@@ -85,15 +85,17 @@ def main() -> None:
     parser.add_argument(
         "--max-input-tokens",
         type=int,
-        default=65536,
+        default=None,
         help=(
             "Cap the linearized timeline at this many tokens before sending it "
             "to the summarizer. Oversized timelines are head+tail truncated with "
-            "an explicit [truncated] marker. 0 disables truncation. Default 65536 "
-            "(covers the full trajectory for >95%% of typical oncology cohorts "
-            "while leaving comfortable headroom in the model context window). "
-            "Must not exceed the model's effective input budget — see "
-            "--model-context-tokens / --max-output-tokens / --token-safety-margin."
+            "an explicit [truncated] marker. 0 disables truncation. "
+            "DEFAULT: unset → use the full effective input budget "
+            "(model_context - max_output - safety_margin - system_prompt ≈ "
+            "116K tokens for apim:gpt-4.1-mini), i.e. as close to the model's "
+            "advertised 128K context as APIM deployments practically allow. "
+            "Set a smaller number only if you need faster / cheaper runs at the "
+            "cost of truncating longer trajectories."
         ),
     )
     parser.add_argument(
@@ -152,13 +154,27 @@ def main() -> None:
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
-    # Validate the token-budget configuration before any LLM call.
+    # Derive / validate the token-budget configuration before any LLM call.
     effective_budget = effective_input_budget(
         model_context_tokens=args.model_context_tokens,
         max_output_tokens=args.max_output_tokens,
         safety_margin=args.token_safety_margin,
     )
-    if args.max_input_tokens > 0 and args.max_input_tokens > effective_budget:
+    if args.max_input_tokens is None:
+        # Unset → use the full effective budget (i.e. ~the model context
+        # window). This gives the summarizer the whole trajectory for every
+        # patient whose linearized timeline fits; only pathological outliers
+        # get head+tail-truncated.
+        args.max_input_tokens = effective_budget
+        logger.info(
+            "Token budget: max_input_tokens defaulted to effective_input_budget=%d "
+            "(model_context=%d, max_output=%d, safety_margin=%d)",
+            effective_budget,
+            args.model_context_tokens,
+            args.max_output_tokens,
+            args.token_safety_margin,
+        )
+    elif args.max_input_tokens > 0 and args.max_input_tokens > effective_budget:
         raise SystemExit(
             f"--max-input-tokens ({args.max_input_tokens}) exceeds the "
             f"effective input budget ({effective_budget}) derived from "
@@ -167,15 +183,16 @@ def main() -> None:
             f"--token-safety-margin={args.token_safety_margin}. "
             "Lower --max-input-tokens or raise --model-context-tokens."
         )
-    logger.info(
-        "Token budget: max_input_tokens=%d effective_input_budget=%d "
-        "(model_context=%d, max_output=%d, safety_margin=%d)",
-        args.max_input_tokens,
-        effective_budget,
-        args.model_context_tokens,
-        args.max_output_tokens,
-        args.token_safety_margin,
-    )
+    else:
+        logger.info(
+            "Token budget: max_input_tokens=%d (user-supplied) "
+            "effective_input_budget=%d (model_context=%d, max_output=%d, safety_margin=%d)",
+            args.max_input_tokens,
+            effective_budget,
+            args.model_context_tokens,
+            args.max_output_tokens,
+            args.token_safety_margin,
+        )
 
     store = CohortStore.load(args.patients, args.items)
 
@@ -226,31 +243,86 @@ def main() -> None:
     n_truncated = 0
     n_retries_used = 0       # total retry attempts consumed across all patients
     n_ok_after_retry = 0     # patients that succeeded only after >= 1 retry
+    n_ok_after_shrink = 0    # patients that succeeded only after input shrinking
+    n_fallback_vignettes = 0 # patients given a deterministic fallback vignette
     skip_reasons = {"timeline_fail": 0, "empty_timeline": 0, "llm_fail": 0}
+
+    # Floor below which we don't shrink input further — tokens smaller than
+    # this leave essentially nothing for the summarizer to work with.
+    MIN_SHRINK_TOKENS = 512
 
     def _bump_skip(reason: str) -> None:
         nonlocal n_skip
         n_skip += 1
         skip_reasons[reason] += 1
 
-    def _summarize_with_retry(text: str, pid: str, et: str) -> tuple[str | None, int]:
-        """Return (vignette_or_None, attempts_beyond_first).
+    def _fallback_vignette(
+        demos_text: str,
+        timeline_text: str,
+        pid: str,
+        et: str,
+    ) -> str:
+        """Deterministic last-resort vignette when the LLM refuses every attempt.
 
-        Applies exponential backoff: after the k-th failure (0-indexed, i.e. the
-        first failure is k=0), sleeps ``backoff * 2**k`` seconds before the next
-        attempt. Total attempts = max_retries + 1.
+        Stitches the demographics block (already formatted) with a short
+        event-line excerpt so BM25 has *something* indexable downstream.
+        Prefixed with a [FALLBACK:deterministic] marker so it's easy to
+        filter these rows out of metrics.
+        """
+        excerpt, _orig, _trunc = truncate_to_tokens(timeline_text, 400)
+        parts = ["[FALLBACK:deterministic — LLM unavailable for this patient]"]
+        if demos_text.strip():
+            parts.append(demos_text.rstrip())
+        if excerpt.strip():
+            parts.append(
+                "Excerpt of clinical events:\n" + excerpt.strip()
+            )
+        parts.append(
+            f"(Generated deterministically for {pid} at prediction time {et}.)"
+        )
+        return "\n\n".join(parts)
+
+    def _summarize_with_retry(
+        text: str, pid: str, et: str,
+    ) -> tuple[str | None, int, bool]:
+        """Return (vignette_or_None, attempts_used, shrunk).
+
+        Each retry:
+          - Waits exponential backoff (``retry_backoff_seconds * 2**k``).
+          - Halves the input (head+tail truncation) before the next call.
+            Floors at ``MIN_SHRINK_TOKENS`` — we won't shrink below that.
+
+        This handles both context-overflow edge cases (input was too big even
+        at the proactive cap) and content-filter hits where the offending
+        passage might sit in the middle of the timeline.
+
+        ``shrunk=True`` if any attempt after the first used a smaller input
+        than the original.
         """
         last_exc: Exception | None = None
+        current = text
+        shrunk = False
         for attempt in range(args.max_retries + 1):
             try:
-                return summarizer.summarize(text), attempt
+                return summarizer.summarize(current), attempt, shrunk
             except Exception as e:
                 last_exc = e
                 if attempt < args.max_retries:
                     sleep_s = args.retry_backoff_seconds * (2 ** attempt)
+                    # Shrink for the next attempt (head+tail truncation).
+                    new_budget = max(MIN_SHRINK_TOKENS, count_tokens(current) // 2)
+                    shrunken_text, _orig, did_trunc = truncate_to_tokens(
+                        current, new_budget
+                    )
+                    if did_trunc:
+                        current = shrunken_text
+                        shrunk = True
                     logger.warning(
-                        "LLM attempt %d/%d failed for %s@%s: %s — retrying in %.1fs",
+                        "LLM attempt %d/%d failed for %s@%s: %s — "
+                        "retrying in %.1fs (input size now: %d tokens%s)",
                         attempt + 1, args.max_retries + 1, pid, et, e, sleep_s,
+                        count_tokens(current),
+                        " [shrunk]" if shrunk else "",
                     )
                     time.sleep(sleep_s)
                 else:
@@ -258,7 +330,7 @@ def main() -> None:
                         "LLM FINAL failure for %s@%s after %d attempts: %s",
                         pid, et, args.max_retries + 1, last_exc,
                     )
-        return None, args.max_retries
+        return None, args.max_retries, shrunk
 
     for p in todo:
         try:
@@ -304,19 +376,37 @@ def main() -> None:
         if demos:
             text = demos + "\n" + text
 
-        vignette, attempts_used = _summarize_with_retry(text, p.person_id, p.embed_time)
+        vignette, attempts_used, was_shrunk = _summarize_with_retry(
+            text, p.person_id, p.embed_time
+        )
         n_retries_used += attempts_used
+
+        # If the LLM refused every attempt, synthesize a deterministic
+        # fallback so EVERY patient ends with a non-empty vignette.
+        # Marked with a visible [FALLBACK:deterministic] prefix so it can
+        # be filtered out of metrics if desired.
         if vignette is None:
-            _bump_skip("llm_fail")
-            if pbar:
-                pbar.update(1)
-                pbar.set_postfix_str(f"ok={n_ok} skip={n_skip}")
-            continue
-        if attempts_used > 0:
-            n_ok_after_retry += 1
+            logger.warning(
+                "Using deterministic fallback vignette for %s@%s "
+                "(LLM failed after %d attempts).",
+                p.person_id, p.embed_time, args.max_retries + 1,
+            )
+            vignette = _fallback_vignette(demos, text, p.person_id, p.embed_time)
+            n_fallback_vignettes += 1
+            # Count it as a non-empty row but also note the failure.
+            skip_reasons["llm_fail"] += 1
+        else:
+            if attempts_used > 0:
+                n_ok_after_retry += 1
+            if was_shrunk:
+                n_ok_after_shrink += 1
 
         store.update_patient(
-            replace(p, vignette=vignette, vignette_input_was_truncated=was_trunc)
+            replace(
+                p,
+                vignette=vignette,
+                vignette_input_was_truncated=was_trunc or was_shrunk,
+            )
         )
         n_ok += 1
 
@@ -334,11 +424,16 @@ def main() -> None:
 
     total_with_vignette = sum(1 for p in store.patient_states() if p.vignette.strip())
     logger.info(
-        "Done. ok=%d skip=%d (timeline_fail=%d, empty_timeline=%d, llm_fail=%d) "
+        "Done. ok=%d (of which fallback=%d, after_retry=%d, after_shrink=%d) "
+        "skip=%d (timeline_fail=%d, empty_timeline=%d); "
+        "llm_fail_during=%d "
         "truncated=%d (max_input_tokens=%d) "
-        "retries_used=%d (ok_after_retry=%d, max_retries=%d) "
+        "retries_used=%d (max_retries=%d) "
         "total_states_with_vignette=%d/%d",
         n_ok,
+        n_fallback_vignettes,
+        n_ok_after_retry,
+        n_ok_after_shrink,
         n_skip,
         skip_reasons["timeline_fail"],
         skip_reasons["empty_timeline"],
@@ -346,7 +441,6 @@ def main() -> None:
         n_truncated,
         args.max_input_tokens,
         n_retries_used,
-        n_ok_after_retry,
         args.max_retries,
         total_with_vignette,
         len(store.patient_states()),
