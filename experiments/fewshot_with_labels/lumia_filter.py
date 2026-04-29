@@ -1,3 +1,7 @@
+from datetime import datetime
+import xml.etree.ElementTree as ET
+
+
 def filter_xml_by_date(input_filename, cutoff_date_str, output_filename=None):
     # 1. Convert the cutoff date string to a datetime object
     cutoff_date = datetime.strptime(cutoff_date_str, "%Y-%m-%d")
