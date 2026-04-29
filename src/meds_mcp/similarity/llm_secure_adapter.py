@@ -44,13 +44,15 @@ class SecureLLMSummarizer:
     def _default_prompt() -> str:
         """Fallback prompt if no external file or system_prompt provided."""
         return (
-            "You are generating a clinical vignette for patient similarity retrieval to support tumor board discussion in thoracic oncology. "
-            "Rewrite the following patient timeline into a concise, factual clinical vignette written in clinical language appropriate for a multidisciplinary tumor board. "
-            "Focus on key clinical landmarks relevant to thoracic cancer, including diagnosis and staging (when stated), treatments and treatment changes, response or progression events, major comorbidities, and clinically significant laboratory, imaging, or pathology results when explicitly mentioned. "
-            "Preserve all explicitly stated information and do not add, infer, or reinterpret any details. Do not speculate, assign causality, or introduce unstated clinical reasoning. "
-            "Exclude administrative details and minor events unless clinically relevant. Include laboratory or imaging results only if they are explicitly reported and materially relevant to disease status or treatment decisions. "
-            "Do not describe the timeline itself. Prefer concrete clinical events and states, and maintain chronological ordering when possible. "
-            "The output should be a single neutral paragraph of 3–5 sentences, suitable for review by a tumor board."
+            "You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. "
+            "Output exactly one paragraph (4-8 sentences), narrative prose only. "
+            "Hard constraints: "
+            "1) Findings-first: do not produce a procedure list. Every mentioned imaging/lab/path study must include its clinically relevant result when present. "
+            "2) No speculation: use only explicit facts from the source; never infer diagnoses or intent. "
+            "3) Prioritize disease status and trajectory: diagnosis/stage/histology (if stated), treatment course, response/progression, key abnormal findings, and clinically meaningful negatives (for example no metastatic disease). "
+            "4) Compress repetitive surveillance into trajectory statements rather than enumerating every repeated test. "
+            "5) If a result is not documented, mention that briefly once; do not repeat placeholders. "
+            "6) No bullets, no headers, no timeline meta-commentary, no dates, and no administrative details unless clinically relevant."
         )
 
     def summarize(self, text: str) -> str:

@@ -315,6 +315,15 @@ grep -E "Timeline extract failed|Empty timeline|Vignette LLM failed" logs/precom
 
 The same `tmux new -s <name>` pattern works for steps 4 and 5 (the LLM-bound runs); just pick a different session name per run.
 
+#### Optional: Vertex batch vignette precompute (Gemini)
+
+```bash
+uv run python experiments/fewshot_with_labels/precompute_vignettes_vertex_batch.py \
+  --model gemini-2.5-flash
+```
+
+This submits one Vertex batch job for the pending `(person_id, embed_time)` states, then writes returned summaries back into `patients.jsonl`.
+
 ### 3. Sample the evaluation pool
 
 Pick one pattern depending on what you want to evaluate on:
@@ -357,6 +366,33 @@ uv run python experiments/fewshot_with_labels/run_experiment.py \
 uv run python experiments/fewshot_with_labels/run_experiment.py \
   --context timeline --pool $POOL --query-split $QSPLIT \
   --top-k 3 --model apim:gpt-4.1-mini
+```
+
+`run_experiment.py` now supports:
+- class-balanced few-shot neighbor selection (`Yes`/`No` mix when available),
+- cached example rationales via `--reason-cache`,
+- ICL-style prompt ordering with explicit `Answer` + `Reason` examples.
+
+Build the reason cache first:
+
+```bash
+uv run python experiments/fewshot_with_labels/build_reason_cache.py \
+  --split train --model gemini-2.5-flash
+```
+
+Vertex batch mode for reason cache generation:
+
+```bash
+uv run python experiments/fewshot_with_labels/build_reason_cache.py \
+  --mode vertex_batch --model gemini-2.5-flash
+```
+
+Optional Vertex batch mode for experiment inference:
+
+```bash
+uv run python experiments/fewshot_with_labels/run_experiment_vertex_batch.py \
+  --context vignette --pool $POOL --query-split $QSPLIT \
+  --top-k 3 --model gemini-2.5-flash
 ```
 
 The scripts skip the BM25 build entirely for `baseline_*` variants (no similars shown → no retrieval). If you do pass `--top-k` on a baseline context, the script logs a warning and ignores it; `top_k` is recorded as `null` in the result rows so the metadata honestly reflects "no retrieval happened". Each `--context` writes its own `experiment_results_<context>.jsonl` and can be rerun independently.
@@ -459,6 +495,8 @@ On success, each written `PatientState` now records a `vignette_input_was_trunca
 - `--model-context-tokens` (default **120000**), `--max-output-tokens` (default **8**), `--token-safety-margin` (default **2048**) — same semantics as precompute; used to compute the auto `--max-prompt-tokens`. `max-output-tokens` is 8 here (Yes/No only) rather than 1024 (full vignette).
 - `--llm-retries` (default **1**) — one-shot retry on LLM exceptions. No input mutation. Protects against transient APIM blips without inflating `n_skipped_rows`.
 - `--model`, `--seed`, `--temperature`, `--delay-seconds`.
+- `--reason-cache` (default `outputs/reason_cache.jsonl`) — cached per-example rationale used in the few-shot `Reason:` field.
+- `--reason-missing-policy {placeholder,omit,fail}` — behavior when a retrieved neighbor lacks a cached reason.
 
 Every result row now records `prompt_tokens_before_trim`, `neighbors_dropped_count`, `neighbors_dropped_ids`, and `query_truncated`. The run meta file adds a `prompt_trim_stats` block aggregating those counts across rows.
 
@@ -467,6 +505,18 @@ Every result row now records `prompt_tokens_before_trim`, `neighbors_dropped_cou
 
 ### `show_prompt.py`
 - `--person-id`, `--task`, `--context` (or `all`), `--top-k`, `--show-system`.
+
+### `build_reason_cache.py`
+- Generates per-example `Reason` text for `(person_id, embed_time, task)` and writes `reason_cache.jsonl`.
+- `--mode online` uses the standard LLM client.
+- `--mode vertex_batch` submits/reads a Vertex batch job (Gemini-friendly defaults).
+
+### `precompute_vignettes_vertex_batch.py`
+- Vertex batch variant of vignette precompute. Reads pending states, uploads requests, and updates `patients.jsonl` with returned vignettes.
+
+### `run_experiment_vertex_batch.py`
+- Vertex batch variant of `run_experiment.py` for `baseline_vignette` / `baseline_timeline` / `vignette` / `timeline`.
+- Uses the same prompt-construction logic (including reason cache + balanced few-shot neighbors).
 
 ---
 

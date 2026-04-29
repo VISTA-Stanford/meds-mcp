@@ -117,6 +117,33 @@ def label_to_yesno(label: int) -> str:
     return "Yes" if int(label) == 1 else "No"
 
 
+def _reason_key(person_id: str, embed_time: str, task: str) -> str:
+    return f"{person_id}|{embed_time}|{task}"
+
+
+def load_reason_cache(path: Optional[Path]) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            pid = str(row.get("person_id", "") or "")
+            et = str(row.get("embed_time", "") or "")
+            task = str(row.get("task", "") or "")
+            reason = str(row.get("reason", "") or "").strip()
+            if not pid or not et or not task or not reason:
+                continue
+            out[_reason_key(pid, et, task)] = reason
+    return out
+
+
 @dataclass(frozen=True)
 class PromptRenderResult:
     """Result of rendering a user prompt with optional progressive trimming.
@@ -138,6 +165,8 @@ def _render_neighbor_block(
     neighbor: SimilarNeighbor,
     *,
     context: str,
+    question: str,
+    reason: str,
     base_generator: DeterministicTimelineLinearizationGenerator,
     n_encounters: int,
     max_chars: int,
@@ -170,16 +199,64 @@ def _render_neighbor_block(
                 neighbor_text = demos + "\n" + neighbor_text
     else:
         raise ValueError(f"Unknown context for neighbor rendering: {context!r}")
-    return f"SIMILAR PATIENT INFORMATION:\n{neighbor_text}\nANSWER: {answer}"
+    return (
+        f"EXAMPLE PATIENT SUMMARY:\n{neighbor_text}\n\n"
+        f"QUESTION:\n{question}\n"
+        f"Answer: {answer}\n"
+        f"Reason: {reason}"
+    )
 
 
-def _assemble_prompt(query_block: str, question_block: str, neighbor_blocks: list[str]) -> str:
+def _assemble_prompt(
+    query_block: str,
+    question_block: str,
+    neighbor_blocks: list[str],
+    *,
+    task: str,
+    has_similars: bool,
+) -> str:
     """Concatenate the prompt pieces in the canonical order."""
     if not neighbor_blocks:
         return f"{query_block}\n{question_block}"
     similars_block = "\n\n".join(neighbor_blocks)
-    # Canonical layout: query info -> question -> exemplars.
-    return f"{query_block}\n{question_block}\n{similars_block}"
+    instruction = (
+        f"TASK:\nGiven a patient clinical summary, determine whether {task}.\n"
+        'Respond with exactly "Yes" or "No".\n\n'
+        "EXAMPLES:\n"
+        f"{similars_block}\n\n"
+        "---\n"
+        "NEW PATIENT:\n"
+        f"{query_block}\n{question_block}\n"
+        "Answer:"
+    )
+    return instruction
+
+
+def select_balanced_neighbors(
+    neighbors: list[SimilarNeighbor],
+    top_k: int,
+) -> list[SimilarNeighbor]:
+    if top_k <= 0 or not neighbors:
+        return []
+    yes = [n for n in neighbors if int(n.item.label) == 1]
+    no = [n for n in neighbors if int(n.item.label) != 1]
+    target_yes = top_k // 2
+    target_no = top_k - target_yes
+    chosen: list[SimilarNeighbor] = []
+    chosen.extend(yes[:target_yes])
+    chosen.extend(no[:target_no])
+    # Backfill by original retrieval order to preserve relevance.
+    if len(chosen) < top_k:
+        chosen_ids = {(n.patient.person_id, n.patient.embed_time) for n in chosen}
+        for n in neighbors:
+            k = (n.patient.person_id, n.patient.embed_time)
+            if k in chosen_ids:
+                continue
+            chosen.append(n)
+            chosen_ids.add(k)
+            if len(chosen) >= top_k:
+                break
+    return chosen[:top_k]
 
 
 def build_prompt(
@@ -198,6 +275,8 @@ def build_prompt(
     max_prompt_tokens: Optional[int] = None,
     system_tokens: int = 0,
     xml_dir: Optional[str] = None,
+    reason_by_key: Optional[dict[str, str]] = None,
+    reason_missing_policy: str = "placeholder",
 ) -> PromptRenderResult:
     """Render the user prompt for one (query_pid, task) row.
 
@@ -231,9 +310,20 @@ def build_prompt(
     neighbor_blocks: list[str] = []
     if context in WITH_SIMILARS:
         for n in neighbors:
+            rkey = _reason_key(n.patient.person_id, n.patient.embed_time, n.item.task)
+            reason = (reason_by_key or {}).get(rkey, "").strip()
+            if not reason:
+                if reason_missing_policy == "fail":
+                    raise ValueError(f"Missing cached reason for {rkey}")
+                if reason_missing_policy == "omit":
+                    reason = "Evidence in this example supports the stated answer."
+                else:
+                    reason = "Limited evidence available in this summary."
             block = _render_neighbor_block(
                 n,
                 context=context,
+                question=question,
+                reason=reason,
                 base_generator=base_generator,
                 n_encounters=n_encounters,
                 max_chars=max_chars,
@@ -245,7 +335,13 @@ def build_prompt(
             neighbor_blocks.append(block)
 
     # 3) Assemble candidate prompt and measure.
-    prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+    prompt = _assemble_prompt(
+        query_block,
+        question_block,
+        neighbor_blocks,
+        task=task,
+        has_similars=(context in WITH_SIMILARS),
+    )
     tokens_before_trim = count_tokens(prompt)
     dropped_ids: list[str] = []
     query_truncated = False
@@ -266,13 +362,25 @@ def build_prompt(
             dropped_ids.append(neighbor_pids[idx])
             del neighbor_blocks[idx]
             del neighbor_pids[idx]
-            prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+            prompt = _assemble_prompt(
+                query_block,
+                question_block,
+                neighbor_blocks,
+                task=task,
+                has_similars=(context in WITH_SIMILARS),
+            )
 
         # 4b) If still over, truncate the query block itself.
         if count_tokens(prompt) > budget:
             # Compute the budget available to the query block alone:
             #   budget - question_block_tokens - similars_block_tokens - framing_tokens
-            non_query = _assemble_prompt("", question_block, neighbor_blocks)
+            non_query = _assemble_prompt(
+                "",
+                question_block,
+                neighbor_blocks,
+                task=task,
+                has_similars=(context in WITH_SIMILARS),
+            )
             overhead_tokens = count_tokens(non_query)
             # Leave a small tail buffer for the framing lines the joins add.
             query_budget = max(64, budget - overhead_tokens - 16)
@@ -281,7 +389,13 @@ def build_prompt(
             if was_trunc:
                 query_truncated = True
                 query_block = f"QUERY PATIENT INFORMATION:\n{new_query_text}\n"
-                prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+                prompt = _assemble_prompt(
+                    query_block,
+                    question_block,
+                    neighbor_blocks,
+                    task=task,
+                    has_similars=(context in WITH_SIMILARS),
+                )
 
     tokens_total = count_tokens(prompt)
     return PromptRenderResult(
@@ -454,6 +568,18 @@ def main() -> None:
     parser.add_argument("--delay-seconds", type=float, default=0.3)
     parser.add_argument("--query-split", type=str, default="valid")
     parser.add_argument("--candidate-split", type=str, default="train")
+    parser.add_argument(
+        "--reason-cache",
+        type=Path,
+        default=_paths.outputs_dir() / "reason_cache.jsonl",
+        help="JSONL cache with per-example reason keyed by person_id/embed_time/task.",
+    )
+    parser.add_argument(
+        "--reason-missing-policy",
+        choices=("placeholder", "omit", "fail"),
+        default="placeholder",
+        help="How to handle missing reason-cache entries for few-shot examples.",
+    )
     args = parser.parse_args()
 
     context: str = args.context
@@ -479,6 +605,7 @@ def main() -> None:
         pool_ids: list[str] = [str(x) for x in json.load(f)]
 
     store = CohortStore.load(args.patients, args.items)
+    reason_by_key = load_reason_cache(args.reason_cache)
 
     # Retriever only needed when the prompt will actually include similar patients.
     # baseline_* contexts are query-only, so we skip the per-task BM25 build entirely.
@@ -641,8 +768,12 @@ def main() -> None:
                     neighbors = retriever.retrieve(
                         query_vignette=query_vignette,
                         task=item.task,
-                        top_k=effective_top_k if effective_top_k is not None else args.top_k,
+                        top_k=(effective_top_k if effective_top_k is not None else args.top_k) * 4,
                         exclude_pid=pid,
+                    )
+                    neighbors = select_balanced_neighbors(
+                        neighbors,
+                        effective_top_k if effective_top_k is not None else args.top_k,
                     )
 
                 render = build_prompt(
@@ -660,6 +791,8 @@ def main() -> None:
                     max_prompt_tokens=prompt_cap_total,
                     system_tokens=system_tokens,
                     xml_dir=str(args.corpus_dir),
+                    reason_by_key=reason_by_key,
+                    reason_missing_policy=args.reason_missing_policy,
                 )
                 prompt = render.prompt
 
@@ -704,6 +837,13 @@ def main() -> None:
                     n for n in neighbors
                     if n.patient.person_id not in render.neighbors_dropped_ids
                 ]
+                kept_reasons = [
+                    reason_by_key.get(
+                        _reason_key(n.patient.person_id, n.patient.embed_time, n.item.task),
+                        "",
+                    )
+                    for n in kept_neighbors
+                ]
                 rec = {
                     "context": context,
                     "person_id": pid,
@@ -721,6 +861,7 @@ def main() -> None:
                     "similar_patient_ids": [n.patient.person_id for n in kept_neighbors],
                     "similar_labels": [label_to_yesno(n.item.label) for n in kept_neighbors],
                     "similar_scores": [n.score for n in kept_neighbors],
+                    "similar_reasons": kept_reasons,
                     "top_k": effective_top_k,
                     "model": args.model,
                     "seed": args.seed,
