@@ -55,6 +55,8 @@ dependencies = [
   "pytest",
   "tqdm>=4.65.0",
   "dspy",
+  "google-cloud-storage>=3.10.1",
+  "google-cloud-aiplatform>=1.149.0",
 ]
 
 [project.optional-dependencies]

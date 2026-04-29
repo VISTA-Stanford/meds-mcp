@@ -57,6 +57,14 @@ def main() -> None:
     parser.add_argument("--candidate-split", type=str, default="train")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--n", type=int, default=None)
+    parser.add_argument(
+        "--tasks",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="TASK",
+        help="Only run these task names (e.g. guo_readmission). Default: all tasks.",
+    )
     parser.add_argument("--n-encounters", type=int, default=0)
     parser.add_argument("--max-chars", type=int, default=120000)
     parser.add_argument("--reason-cache", type=Path, default=_paths.outputs_dir() / "reason_cache.jsonl")
@@ -93,8 +101,14 @@ def main() -> None:
     linearizer = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
 
     requests: list[dict] = []
+    example_prompt_path = args.output_dir / f"example_prompt_{context}.txt"
+    example_prompt_saved = False
     for pid in selected:
-        items = [it for it in store.items_for_patient(pid) if it.label != -1]
+        tasks_filter = set(args.tasks) if args.tasks else None
+        items = [
+            it for it in store.items_for_patient(pid)
+            if it.label != -1 and (tasks_filter is None or it.task in tasks_filter)
+        ]
         for item in items:
             state = store.get_or_none(pid, item.embed_time)
             if state is None or state.split != args.query_split:
@@ -143,6 +157,16 @@ def main() -> None:
                 reason_by_key=reason_by_key,
                 reason_missing_policy=args.reason_missing_policy,
             )
+            if not example_prompt_saved:
+                args.output_dir.mkdir(parents=True, exist_ok=True)
+                example_prompt_path.write_text(
+                    f"=== SYSTEM PROMPT ===\n{SYSTEM_PROMPT}\n\n"
+                    f"=== USER PROMPT ===\n{render.prompt}\n",
+                    encoding="utf-8",
+                )
+                example_prompt_saved = True
+                logger.info("Saved example prompt to %s", example_prompt_path)
+
             requests.append(
                 {
                     "request": {

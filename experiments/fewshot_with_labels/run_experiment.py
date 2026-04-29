@@ -79,6 +79,21 @@ WITH_SIMILARS = {"vignette", "timeline"}
 QUERY_AS_VIGNETTE = {"baseline_vignette", "vignette"}
 QUERY_AS_TIMELINE = {"baseline_timeline", "timeline"}
 
+# Task-specific prompt descriptions. When a task has an entry here, both the
+# baseline and few-shot contexts use the same TASK: preamble, replacing the old
+# generic "determine whether {task}" header and the inline QUESTION: block.
+TASK_DESCRIPTIONS: dict[str, str] = {
+    "guo_readmission": (
+        "Given a current patient clinical summary, written at time of discharge, "
+        "predict the risk that the patient will have a hospital readmission within 30 days of discharge.\n\n"
+        'Answer "Yes" if the summary contains evidence or clinical risk factors strongly associated '
+        "with a new inpatient admission within 30 days after discharge. "
+        'Answer "No" if there is no evidence to suggest a risk of readmission, '
+        "only outpatient follow-up or ED-only visits.\n\n"
+        'Respond with exactly "Yes" or "No".'
+    ),
+}
+
 SYSTEM_PROMPT = (
     "You are a clinical-prediction assistant. Answer the user's question about the query "
     "patient using only the evidence in the user message. Respond with exactly one word "
@@ -171,6 +186,7 @@ def _render_neighbor_block(
     n_encounters: int,
     max_chars: int,
     xml_dir: Optional[str] = None,
+    omit_question: bool = False,
 ) -> Optional[str]:
     """Render a single similar-patient block. Returns None if rendering fails
     (e.g. missing XML) — caller should skip that neighbor."""
@@ -199,12 +215,13 @@ def _render_neighbor_block(
                 neighbor_text = demos + "\n" + neighbor_text
     else:
         raise ValueError(f"Unknown context for neighbor rendering: {context!r}")
-    return (
-        f"EXAMPLE PATIENT SUMMARY:\n{neighbor_text}\n\n"
-        f"QUESTION:\n{question}\n"
-        f"Answer: {answer}\n"
-        f"Reason: {reason}"
-    )
+    lines = [f"EXAMPLE PATIENT SUMMARY:\n{neighbor_text}\n"]
+    if not omit_question:
+        lines.append(f"QUESTION:\n{question}")
+    lines.append(f"Answer: {answer}")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    return "\n".join(lines)
 
 
 def _assemble_prompt(
@@ -216,6 +233,23 @@ def _assemble_prompt(
     has_similars: bool,
 ) -> str:
     """Concatenate the prompt pieces in the canonical order."""
+    task_desc = TASK_DESCRIPTIONS.get(task)
+    if task_desc:
+        # Unified format: same TASK: preamble for both baseline and few-shot.
+        task_header = f"TASK:\n{task_desc}\n"
+        if not neighbor_blocks:
+            return f"{task_header}\n{query_block}"
+        similars_block = "\n\n".join(neighbor_blocks)
+        return (
+            f"{task_header}\n"
+            "EXAMPLES:\n"
+            f"{similars_block}\n\n"
+            "---\n"
+            "NEW PATIENT:\n"
+            f"{query_block}\n"
+            "Answer:"
+        )
+    # Fallback for tasks without a custom description: original format.
     if not neighbor_blocks:
         return f"{query_block}\n{question_block}"
     similars_block = "\n\n".join(neighbor_blocks)
@@ -300,7 +334,8 @@ def build_prompt(
     else:
         raise ValueError(f"Unknown context: {context!r}")
 
-    query_block = f"QUERY PATIENT INFORMATION:\n{query_text}\n"
+    query_header = "PATIENT SUMMARY:" if task in TASK_DESCRIPTIONS else "QUERY PATIENT INFORMATION:"
+    query_block = f"{query_header}\n{query_text}\n"
     question_block = f"QUESTION:\n{question}\n"
 
     # 2) Render every neighbor block ONCE up front (critical: never re-generate
@@ -315,8 +350,8 @@ def build_prompt(
             if not reason:
                 if reason_missing_policy == "fail":
                     raise ValueError(f"Missing cached reason for {rkey}")
-                if reason_missing_policy == "omit":
-                    reason = "Evidence in this example supports the stated answer."
+                elif reason_missing_policy == "omit":
+                    reason = ""
                 else:
                     reason = "Limited evidence available in this summary."
             block = _render_neighbor_block(
@@ -328,6 +363,7 @@ def build_prompt(
                 n_encounters=n_encounters,
                 max_chars=max_chars,
                 xml_dir=xml_dir,
+                omit_question=task in TASK_DESCRIPTIONS,
             )
             if block is None:
                 continue

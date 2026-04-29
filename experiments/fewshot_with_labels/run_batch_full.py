@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import sys
 import time
@@ -142,29 +143,75 @@ def load_task_questions(path: Path, dataset: str) -> dict[str, str]:
 # Phase 1: Load rubricified data
 # ---------------------------------------------------------------------------
 
+def _stratified_sample(
+    records: list[dict],
+    n_per_label: int,
+    seed: int,
+) -> list[dict]:
+    """Sample n_per_label records per binary label class from query split.
+
+    Only the query (non-train) split records are stratified; train records
+    are always returned in full so the retrieval index is complete.
+    """
+    groups: dict[int, list[dict]] = {}
+    for r in records:
+        lbl = label_to_int(r["label"])
+        groups.setdefault(lbl, []).append(r)
+
+    rng = random.Random(seed)
+    chosen: list[dict] = []
+    for lbl in sorted(groups):
+        pool = groups[lbl]
+        take = min(n_per_label, len(pool))
+        if take < n_per_label:
+            _log(
+                f"  [WARN] Label={lbl}: only {len(pool)} records available "
+                f"(requested {n_per_label}); taking all."
+            )
+        chosen.extend(rng.sample(pool, take))
+    _log(
+        f"  Stratified sample: "
+        + ", ".join(f"label={k} n={min(n_per_label, len(v))}" for k, v in sorted(groups.items()))
+        + f" → {len(chosen)} total"
+    )
+    return chosen
+
+
 def load_rubricified(
     rubric_base: Path,
     query_splits: list[str],
     limit: Optional[int],
+    tasks_filter: Optional[set[str]] = None,
+    n_per_label: Optional[int] = None,
+    seed: int = 42,
 ) -> dict[str, dict[str, list[dict]]]:
     """Returns {task: {split: [records]}}.
 
     query_splits controls which splits are loaded as query candidates;
     train is always loaded for retrieval.
+    tasks_filter, when set, restricts which tasks are loaded.
+    n_per_label, when set, stratifies each query split to n_per_label records
+    per binary label class (50/50 by default). Train split is never subsampled.
     """
+    import random as _random
     data: dict[str, dict[str, list[dict]]] = {}
     for task_dir in sorted(rubric_base.iterdir()):
         if not task_dir.is_dir():
             continue
         task = task_dir.name
+        if tasks_filter and task not in tasks_filter:
+            continue
         data[task] = {}
         for split_file in sorted(task_dir.iterdir()):
             split = split_file.stem
             with open(split_file) as f:
                 recs = json.load(f)
             if split in query_splits or split == TRAIN_SPLIT:
-                if limit is not None and split != TRAIN_SPLIT:
-                    recs = recs[:limit]
+                if split != TRAIN_SPLIT:
+                    if n_per_label is not None:
+                        recs = _stratified_sample(recs, n_per_label, seed)
+                    elif limit is not None:
+                        recs = recs[:limit]
                 data[task][split] = recs
 
     n_tasks   = len(data)
@@ -238,6 +285,7 @@ def build_requests(
     context: str,
     query_splits: list[str],
     top_k: int,
+    example_prompt_path: Optional[Path] = None,
 ) -> list[dict]:
     is_fewshot = context == "vignette"
     requests = []
@@ -277,6 +325,14 @@ def build_requests(
                     )
                 else:
                     prompt = f"{query_block}\n{question_block}"
+
+                if example_prompt_path is not None and not requests:
+                    example_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+                    example_prompt_path.write_text(
+                        f"=== SYSTEM PROMPT ===\n{SYSTEM_PROMPT}\n\n"
+                        f"=== USER PROMPT ===\n{prompt}\n",
+                        encoding="utf-8",
+                    )
 
                 requests.append({
                     "request": {
@@ -593,6 +649,16 @@ def parse_args() -> argparse.Namespace:
                    help="Number of similar patients to inject (vignette context only)")
     p.add_argument("--limit",    type=int, default=None,
                    help="Limit query records per task per split (for smoke tests)")
+    p.add_argument("--tasks", nargs="+", default=None, metavar="TASK",
+                   help="Only run these tasks (e.g. guo_readmission). Default: all tasks.")
+    p.add_argument("--n-per-label", type=int, default=None, metavar="N",
+                   help=(
+                       "Stratified sampling: take N records per binary label class "
+                       "from each query split. Only test/val splits are subsampled; "
+                       "train is always used in full for retrieval."
+                   ))
+    p.add_argument("--seed", type=int, default=42,
+                   help="Random seed for stratified sampling (default: 42)")
     p.add_argument("--dry-run",  action="store_true",
                    help="Validate data coverage and print sample prompt; do not call Vertex AI")
     return p.parse_args()
@@ -615,8 +681,21 @@ def main() -> None:
     _log(f"Query splits: {query_splits}  |  top_k={args.top_k if args.context == 'vignette' else 'N/A'}")
     _log(f"Model: {VERTEX_MODEL}  |  thinkingBudget=0  |  maxOutputTokens=16")
 
+    tasks_filter = set(args.tasks) if args.tasks else None
+    if tasks_filter:
+        _log(f"Task filter: {sorted(tasks_filter)}")
+    if args.n_per_label:
+        _log(f"Stratified sampling: {args.n_per_label} per label class from query splits (train kept in full)")
+
     _log("=== Phase 1: Loading rubricified data ===")
-    data = load_rubricified(cfg["rubric_base"], query_splits, args.limit)
+    data = load_rubricified(
+        cfg["rubric_base"],
+        query_splits,
+        args.limit,
+        tasks_filter=tasks_filter,
+        n_per_label=args.n_per_label,
+        seed=args.seed,
+    )
 
     _log("=== Loading task questions ===")
     task_questions = load_task_questions(cfg["task_questions"], args.dataset)
@@ -632,7 +711,11 @@ def main() -> None:
         indices = build_indices(data)
 
     _log("=== Phase 3: Building prompts ===")
-    requests = build_requests(data, indices, task_questions, args.context, query_splits, args.top_k)
+    example_prompt_path = out_dir / f"example_prompt_{args.context}.txt"
+    requests = build_requests(
+        data, indices, task_questions, args.context, query_splits, args.top_k,
+        example_prompt_path=example_prompt_path,
+    )
 
     _log("=== Phase 4: Uploading input JSONL to GCS ===")
     input_uri = upload_input(requests, job_name, run_id)

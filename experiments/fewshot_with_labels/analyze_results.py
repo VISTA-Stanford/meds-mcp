@@ -19,7 +19,7 @@ import logging
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _p in (_REPO_ROOT / "src", _REPO_ROOT):
@@ -49,6 +49,29 @@ def key_of(row: dict[str, Any]) -> tuple[str, str]:
     return (str(row.get("person_id", "")), str(row.get("task", "")))
 
 
+def _balanced_accuracy(rows: list[dict[str, Any]]) -> Optional[float]:
+    """BA = (TPR + TNR) / 2 for binary Yes/No predictions."""
+    tp = fn = tn = fp = 0
+    for r in rows:
+        true = r.get("true_yes_no")
+        pred = r.get("pred")
+        if true not in ("Yes", "No") or pred not in ("Yes", "No"):
+            continue
+        if true == "Yes" and pred == "Yes":
+            tp += 1
+        elif true == "Yes" and pred == "No":
+            fn += 1
+        elif true == "No" and pred == "No":
+            tn += 1
+        else:
+            fp += 1
+    tpr = tp / (tp + fn) if (tp + fn) > 0 else None
+    tnr = tn / (tn + fp) if (tn + fp) > 0 else None
+    if tpr is None or tnr is None:
+        return None
+    return round((tpr + tnr) / 2, 4)
+
+
 def per_variant_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(rows)
     parsed = sum(1 for r in rows if r.get("pred") in ("Yes", "No"))
@@ -75,6 +98,7 @@ def per_variant_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         per_task[task] = {
             "n": tn,
             "accuracy": round(tc / tn, 4) if tn else None,
+            "balanced_accuracy": _balanced_accuracy(trows),
             "small_n": tn < SMALL_N_THRESHOLD,
         }
 
@@ -82,6 +106,7 @@ def per_variant_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "n": n,
         "parse_rate": round(parsed / n, 4) if n else None,
         "accuracy": round(correct / n, 4) if n else None,
+        "balanced_accuracy": _balanced_accuracy(rows),
         "n_correct": correct,
         "n_unparsed": unparsed,
         "confusion": {f"true={t}|pred={p}": c for (t, p), c in sorted(conf.items())},
@@ -121,11 +146,20 @@ def compare_vs_baseline(
         if bc and not vc:
             hurts += 1
 
+    shared_baseline = [baseline_by_key[k] for k in shared]
+    shared_variant = [variant_by_key[k] for k in shared]
+    ba_b = _balanced_accuracy(shared_baseline)
+    ba_v = _balanced_accuracy(shared_variant)
+    delta_ba = round(ba_v - ba_b, 4) if (ba_b is not None and ba_v is not None) else None
+
     return {
         "n_shared": n,
         "accuracy_baseline_on_shared": round(acc_b / n, 4),
         "accuracy_variant_on_shared": round(acc_v / n, 4),
         "delta_acc_variant_minus_baseline": round((acc_v - acc_b) / n, 4),
+        "balanced_accuracy_baseline_on_shared": ba_b,
+        "balanced_accuracy_variant_on_shared": ba_v,
+        "delta_balanced_acc_variant_minus_baseline": delta_ba,
         "count_baseline_wrong_on_shared": baseline_wrong,
         "flip_pct_baseline_wrong_variant_right": round(100.0 * flips / n, 4),
         "fix_rate_given_baseline_wrong": (
@@ -133,6 +167,30 @@ def compare_vs_baseline(
         ),
         "hurt_pct_baseline_right_variant_wrong": round(100.0 * hurts / n, 4),
     }
+
+
+def _print_example_prompts(input_dir: Path, contexts: list[str]) -> None:
+    """Print one saved example prompt per context variant."""
+    shown = 0
+    # Prefer the canonical zero-shot / fewshot pair when both are present.
+    priority = ["baseline_vignette", "vignette", "baseline_timeline", "timeline"]
+    ordered = [c for c in priority if c in contexts] + [c for c in contexts if c not in priority]
+    for ctx in ordered:
+        path = input_dir / f"example_prompt_{ctx}.txt"
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        label = "ZERO-SHOT" if ctx.startswith("baseline") else "FEW-SHOT"
+        print(f"\n{'='*70}")
+        print(f"EXAMPLE CONTEXT — {ctx} ({label})")
+        print("=" * 70)
+        print(text)
+        shown += 1
+    if shown == 0:
+        print(
+            "\n[No example_prompt_<context>.txt files found in input_dir. "
+            "Run run_experiment_vertex_batch.py to generate them.]"
+        )
 
 
 def main() -> None:
@@ -220,7 +278,7 @@ def main() -> None:
         writer = csv.writer(f)
         header = ["task"]
         for ctx in contexts:
-            header.extend([f"{ctx}_n", f"{ctx}_acc", f"{ctx}_small_n"])
+            header.extend([f"{ctx}_n", f"{ctx}_acc", f"{ctx}_balanced_acc", f"{ctx}_small_n"])
         header.append("best_variant")
         writer.writerow(header)
         for task in all_tasks:
@@ -228,9 +286,9 @@ def main() -> None:
             for ctx in contexts:
                 cell = per_task_matrix[task].get(ctx)
                 if cell:
-                    row_cells.extend([cell["n"], cell["accuracy"], cell["small_n"]])
+                    row_cells.extend([cell["n"], cell["accuracy"], cell.get("balanced_accuracy"), cell["small_n"]])
                 else:
-                    row_cells.extend(["", "", ""])
+                    row_cells.extend(["", "", "", ""])
             row_cells.append(per_task_matrix[task].get("best_variant") or "")
             writer.writerow(row_cells)
 
@@ -241,7 +299,10 @@ def main() -> None:
     print("\nOverall accuracy:")
     for ctx in contexts:
         v = per_variant[ctx]
-        print(f"  {ctx:9s}  n={v['n']:<5d}  acc={v['accuracy']}  parse_rate={v['parse_rate']}")
+        print(
+            f"  {ctx:9s}  n={v['n']:<5d}  acc={v['accuracy']}  "
+            f"balanced_acc={v['balanced_accuracy']}  parse_rate={v['parse_rate']}"
+        )
 
     if comparisons:
         print("\nPaired comparisons (with-similars vs matched baseline):")
@@ -253,12 +314,15 @@ def main() -> None:
             print(
                 f"  {ctx:9s} vs {pair:<20s}  "
                 f"delta_acc={c['delta_acc_variant_minus_baseline']:+.4f}  "
+                f"delta_balanced_acc={c['delta_balanced_acc_variant_minus_baseline']}  "
                 f"fix={c['fix_rate_given_baseline_wrong']}  "
                 f"hurt={c['hurt_pct_baseline_right_variant_wrong']}"
             )
 
     print(f"\nWrote {out_path}")
     print(f"Wrote {csv_path}")
+
+    _print_example_prompts(args.input_dir, contexts)
 
 
 def print_per_task_table(

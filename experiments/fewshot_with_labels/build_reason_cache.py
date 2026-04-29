@@ -18,7 +18,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Optional
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _p in (_REPO_ROOT / "src", _REPO_ROOT):
@@ -154,10 +154,13 @@ def collect_todo(
     existing: dict[str, ReasonRow],
     split: str,
     force: bool,
+    tasks: Optional[set[str]] = None,
 ) -> list[tuple[str, str, str, str, int]]:
     todo: list[tuple[str, str, str, str, int]] = []
     for item in store.items():
         if item.split != split or item.label == -1:
+            continue
+        if tasks and item.task not in tasks:
             continue
         state = store.get_or_none(item.person_id, item.embed_time)
         if state is None or not state.vignette.strip():
@@ -326,6 +329,14 @@ def main() -> None:
     parser.add_argument("--items", type=Path, default=_paths.items_jsonl())
     parser.add_argument("--output", type=Path, default=_paths.outputs_dir() / "reason_cache.jsonl")
     parser.add_argument("--split", type=str, default="train")
+    parser.add_argument(
+        "--tasks",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="TASK",
+        help="Only generate reasons for these task names (e.g. guo_readmission). Default: all tasks.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--model", type=str, default="gemini-2.5-flash")
     parser.add_argument("--mode", choices=("online", "vertex_batch"), default="online")
@@ -346,7 +357,8 @@ def main() -> None:
 
     store = CohortStore.load(args.patients, args.items)
     existing = load_existing(args.output)
-    todo = collect_todo(store, existing, split=args.split, force=args.force)
+    tasks_filter = set(args.tasks) if args.tasks else None
+    todo = collect_todo(store, existing, split=args.split, force=args.force, tasks=tasks_filter)
     logger.info("Reason-cache rows to generate: %d", len(todo))
     if not todo:
         logger.info("Nothing to do.")

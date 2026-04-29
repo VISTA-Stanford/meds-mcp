@@ -43,6 +43,18 @@ def main() -> None:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--n-encounters", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--vignette-prompt",
+        type=Path,
+        default=None,
+        help="Path to a custom vignette system prompt file. Overrides the default vignette_prompt.txt.",
+    )
+    parser.add_argument(
+        "--person-ids-file",
+        type=Path,
+        default=None,
+        help="JSON file containing a list of person_id strings. When set, only generate vignettes for those patients.",
+    )
     parser.add_argument("--model", type=str, default="gemini-2.5-flash")
     parser.add_argument("--vertex-project", type=str, default="som-nero-plevriti-deidbdf")
     parser.add_argument("--vertex-location", type=str, default="us-central1")
@@ -64,9 +76,24 @@ def main() -> None:
 
     store = CohortStore.load(args.patients, args.items)
     linearizer = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
-    system_prompt = load_vignette_prompt() or SecureLLMSummarizer._default_prompt()
+    if args.vignette_prompt is not None:
+        system_prompt = args.vignette_prompt.read_text(encoding="utf-8").strip()
+        logger.info("Using custom vignette prompt from %s", args.vignette_prompt)
+    else:
+        system_prompt = load_vignette_prompt() or SecureLLMSummarizer._default_prompt()
 
-    todo = [p for p in store.patient_states() if (args.force or not p.vignette.strip()) and p.embed_time]
+    pid_filter: set[str] | None = None
+    if args.person_ids_file is not None:
+        import json as _json
+        pid_filter = {str(x) for x in _json.loads(args.person_ids_file.read_text())}
+        logger.info("Restricting vignette generation to %d person_ids from %s", len(pid_filter), args.person_ids_file)
+
+    todo = [
+        p for p in store.patient_states()
+        if (args.force or not p.vignette.strip())
+        and p.embed_time
+        and (pid_filter is None or p.person_id in pid_filter)
+    ]
     if args.limit is not None:
         todo = todo[: args.limit]
     logger.info("States to summarize via batch: %d", len(todo))
