@@ -205,6 +205,8 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+.claude
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
@@ -218,6 +220,8 @@ data/
 **/cache
 dumps/
 data.ms/
+results/
+experiments/*/outputs/
 
 # Prompts (keep .example.txt tracked, ignore actual prompts)
 configs/prompts/*.txt

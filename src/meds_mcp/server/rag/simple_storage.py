@@ -69,16 +69,19 @@ class Patient:
         """Get all events for this patient."""
         events = []
         for node in self.nodes:
+            meta = node.metadata or {}
             events.append(
                 {
                     "id": node.node_id,
                     "content": node.text,
-                    "metadata": node.metadata,
-                    "timestamp": node.metadata.get("timestamp"),
-                    "event_type": node.metadata.get("event_type"),
-                    "code": node.metadata.get("code"),
-                    "name": node.metadata.get("name"),
-                    "person_id": node.metadata.get("person_id"),
+                    "metadata": meta,
+                    "timestamp": meta.get("timestamp"),
+                    "event_type": meta.get("event_type"),
+                    "code": meta.get("code"),
+                    "name": meta.get("name"),
+                    "person_id": meta.get("person_id"),
+                    "value": meta.get("value"),
+                    "unit": meta.get("unit") or meta.get("unit_source_value") or meta.get("units"),
                 }
             )
         return events
@@ -93,11 +96,13 @@ class XMLDocumentStore:
         cache_dir: str = "cache",
         load_all_patients: bool = False,
         patient_id: Optional[str] = None,
+        patient_ids: Optional[List[str]] = None,
     ):
         self.data_dir = Path(data_dir)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.patient_id = patient_id
+        self.patient_ids = patient_ids  # subset of patients to load (e.g. from label CSVs)
 
         # Storage components
         self.docstore = SimpleDocumentStore()
@@ -352,10 +357,16 @@ class XMLDocumentStore:
         return patient.get_events()
 
     def load_all_patients(self):
-        """Scan data_dir for XML files and load each patient (or only patient_id if set)."""
+        """Scan data_dir for XML files and load each patient (or only patient_id/patient_ids if set)."""
         if self.patient_id:
             xml_file = self.data_dir / f"{self.patient_id}.xml"
             xml_files = [xml_file] if xml_file.exists() else []
+        elif self.patient_ids:
+            xml_files = []
+            for pid in self.patient_ids:
+                xml_file = self.data_dir / f"{pid}.xml"
+                if xml_file.exists():
+                    xml_files.append(xml_file)
         else:
             xml_files = list(self.data_dir.glob("*.xml"))
         total_files = len(xml_files)
@@ -377,12 +388,13 @@ def initialize_document_store(
     cache_dir: str = "cache",
     load_all_patients: bool = False,
     patient_id: Optional[str] = None,
+    patient_ids: Optional[List[str]] = None,
 ) -> XMLDocumentStore:
     """Initialize the global document store."""
     global _document_store
 
     _document_store = XMLDocumentStore(
-        data_dir, cache_dir, load_all_patients, patient_id=patient_id
+        data_dir, cache_dir, load_all_patients, patient_id=patient_id, patient_ids=patient_ids
     )
     return _document_store
 
