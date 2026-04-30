@@ -1,7 +1,9 @@
-from datetime import datetime
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
-
+# Filters out all the events after the cutoff date
+# Debloats LUMIA
+# Changes all timestamps into relative time before
 def filter_xml_by_date(input_filename, cutoff_date_str, output_filename=None):
     # 1. Convert the cutoff date string to a datetime object
     cutoff_date = datetime.strptime(cutoff_date_str, "%Y-%m-%d")
@@ -60,14 +62,20 @@ def filter_xml_by_date(input_filename, cutoff_date_str, output_filename=None):
                         kept_count += 1
                         
                         # Change the timestamps into relative time before
-                        delta = entry_date - cutoff_date
-                        years = delta.days//365
-                        days = delta.days %365
-                        hours = delta.seconds // 3600
-                        minutes = (delta.seconds % 3600) // 60
+                        delta = cutoff_date - entry_date 
+                        total_minutes = int(delta.total_seconds() // 60)
+
+                        years = total_minutes // (365 * 24 * 60)
+                        remaining = total_minutes % (365 * 24 * 60)
+
+                        days = remaining // (24 * 60)
+                        remaining %= 24 * 60
+
+                        hours = remaining // 60
+                        minutes = remaining % 60
                         
                         time_delta_str = f"{years}y {days}d {hours}h {minutes}m"
-                        entry.set('time_delta', time_delta_str)
+                        entry.set('time_before_prediction', time_delta_str)
                         del entry.attrib['timestamp']  # Remove the old timestamp attribute
                         
                 except ValueError:
@@ -113,3 +121,9 @@ def filter_xml_by_date(input_filename, cutoff_date_str, output_filename=None):
         print(f"Saved filtered data to {output_filename}")
     
     return tree
+
+
+def tostring(tree):
+    root = tree.getroot()   
+    str_rep=ET.tostring(root, encoding="unicode")
+    return str_rep
