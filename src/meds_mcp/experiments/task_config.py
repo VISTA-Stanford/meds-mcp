@@ -66,21 +66,108 @@ TASK_TO_FILENAME: Dict[str, str] = {
 # so the LLM steers the vignette toward information most relevant to the downstream task.
 TASK_DESCRIPTIONS: Dict[str, str] = {
     # EHRSHOT admin / lab / incident-disease tasks
-    "guo_los": "Highlight admission acuity, comorbidity burden, prior length-of-stay patterns, and any factors likely to delay discharge.",
-    "guo_readmission": "Highlight discharge stability, recent hospitalizations, unresolved issues at discharge, and post-discharge support.",
-    "guo_icu": "Highlight early hospital course severity, vital trends, escalating oxygen or pressor support, and signs of clinical deterioration.",
-    "new_hypertension": "Highlight blood-pressure trajectory, cardiovascular risk factors, family history, and lifestyle factors.",
-    "new_hyperlipidemia": "Highlight lipid-panel trends, cardiovascular risk factors, diet and lifestyle, and family history.",
-    "new_pancan": "Highlight pancreatic-cancer risk factors (smoking, family history, new-onset diabetes), abdominal symptoms, and abnormal pancreatic imaging or labs.",
-    "new_celiac": "Highlight GI symptoms, autoimmune comorbidities, family history, anemia, and any tTG-IgA results.",
-    "new_lupus": "Highlight autoimmune symptoms (joint pain, rash, serositis), ANA / dsDNA results, cytopenias, and family history.",
-    "new_acutemi": "Highlight cardiovascular risk factors, prior MI / CAD, recent chest pain, troponin / EKG abnormalities, and lipid and diabetes control.",
-    "lab_thrombocytopenia": "Highlight platelet trajectory, recent transfusions, marrow-suppressing drugs, infections, and any bleeding.",
-    "lab_hyperkalemia": "Highlight potassium trajectory, renal function, ACEi / ARB / spironolactone use, and acid-base status.",
-    "lab_hypoglycemia": "Highlight glucose trajectory, insulin or sulfonylurea use, recent oral intake, and hepatic / renal function.",
-    "lab_hyponatremia": "Highlight sodium trajectory, volume status, diuretic use, SIADH context, and renal function.",
-    "lab_anemia": "Highlight hemoglobin trajectory, recent bleeding, transfusions, marrow-suppressing therapy, and iron / B12 status.",
-    "chexpert": "Highlight pulmonary symptoms, recent infections, oxygen requirement, prior chest-imaging findings, and cardiac comorbidities.",
+    "guo_los": (
+        "Highlight admission acuity, comorbidity burden, prior length-of-stay patterns, and any factors likely to delay discharge. Prioritize:\n"
+        "- Reason for admission and acuity (sepsis, organ failure, surgery type).\n"
+        "- Active comorbidities with severity markers (EF %, GFR, HbA1c, GOLD).\n"
+        "- Recent hospitalizations and their length of stay.\n"
+        "- Functional / mobility status and discharge-blocking social factors."
+    ),
+    "guo_readmission": (
+        "Highlight discharge stability, recent hospitalizations, unresolved issues at discharge, and post-discharge support. Prioritize:\n"
+        "- Chronic disease burden with severity markers (e.g., EF %, GFR/CKD stage, GOLD stage, HbA1c, Child-Pugh class).\n"
+        "- Prior hospitalizations and frequency — one of the strongest readmission predictors.\n"
+        "- Acute admission reason, clinical course, and treatment response.\n"
+        "- Clinical status near discharge: residual symptoms, oxygen requirement, functional level, disposition (home/SNF/rehab).\n"
+        "- Outstanding issues at discharge: abnormalities not fully resolved, incomplete workup, medication changes, follow-up gaps.\n"
+        "- Social or functional barriers to recovery if documented (lives alone, limited mobility, adherence issues, substance use)."
+    ),
+    "guo_icu": (
+        "Highlight early hospital course severity, vital trends, escalating oxygen or pressor support, and signs of clinical deterioration. Prioritize:\n"
+        "- Hemodynamic instability (hypotension, tachycardia, hypoxia, fever).\n"
+        "- Oxygen / pressor / ventilator escalation.\n"
+        "- Lactate, WBC, creatinine, and other deterioration markers.\n"
+        "- Underlying severity (sepsis, hemorrhage, organ failure)."
+    ),
+    "new_hypertension": (
+        "Highlight blood-pressure trajectory, cardiovascular risk factors, family history, and lifestyle factors. Prioritize:\n"
+        "- Recent BP readings and trend (pre-hypertensive range).\n"
+        "- Cardiovascular and metabolic risk factors (DM, dyslipidemia, obesity).\n"
+        "- Smoking / alcohol use and family history of HTN."
+    ),
+    "new_hyperlipidemia": (
+        "Highlight lipid-panel trends, cardiovascular risk factors, diet and lifestyle, and family history. Prioritize:\n"
+        "- Recent lipid panel (LDL, HDL, triglycerides) and trend.\n"
+        "- Diabetes, hypertension, obesity, smoking.\n"
+        "- Diet / weight changes and family history of dyslipidemia."
+    ),
+    "new_pancan": (
+        "Highlight pancreatic-cancer risk factors, abdominal symptoms, and abnormal pancreatic imaging or labs. Prioritize:\n"
+        "- Smoking, family history, new-onset diabetes, chronic pancreatitis.\n"
+        "- Abdominal pain, weight loss, jaundice, steatorrhea.\n"
+        "- Pancreatic imaging findings or elevated lipase / CA 19-9."
+    ),
+    "new_celiac": (
+        "Highlight GI symptoms, autoimmune comorbidities, family history, anemia, and any tTG-IgA results. Prioritize:\n"
+        "- GI symptoms (chronic diarrhea, weight loss, malabsorption, bloating).\n"
+        "- Other autoimmune disease (T1DM, thyroiditis) and family history.\n"
+        "- Iron-deficiency anemia, low B12 / folate, abnormal tTG-IgA."
+    ),
+    "new_lupus": (
+        "Highlight autoimmune symptoms, ANA / dsDNA results, cytopenias, and family history. Prioritize:\n"
+        "- Joint pain, malar rash, photosensitivity, serositis, oral ulcers.\n"
+        "- ANA, anti-dsDNA, anti-Smith, low complement (C3/C4).\n"
+        "- Cytopenias, proteinuria, and family history of autoimmune disease."
+    ),
+    "new_acutemi": (
+        "Highlight cardiovascular risk factors, prior MI / CAD, recent symptoms, and labs / EKG abnormalities. Prioritize:\n"
+        "- Prior CAD, MI, PCI, CABG, and stress-test results.\n"
+        "- Risk factors (smoking, DM, HTN, dyslipidemia, family history).\n"
+        "- Recent chest pain, dyspnea, troponin, EKG changes.\n"
+        "- LDL trajectory and HbA1c control."
+    ),
+    "lab_thrombocytopenia": (
+        "Highlight platelet trajectory, recent transfusions, marrow-suppressing drugs, infections, and any bleeding. Prioritize:\n"
+        "- Recent platelet counts and direction of trend.\n"
+        "- Marrow-suppressing therapy (chemo, radiation) and recent transfusions.\n"
+        "- Active infection, sepsis, DIC, or HIT-risk exposures.\n"
+        "- Bleeding history or petechiae."
+    ),
+    "lab_hyperkalemia": (
+        "Highlight potassium trajectory, renal function, K-elevating medications, and acid-base status. Prioritize:\n"
+        "- Recent potassium values and trend.\n"
+        "- Renal function (Cr, GFR, AKI vs CKD stage).\n"
+        "- ACEi / ARB / spironolactone / NSAID / K-supplement exposure.\n"
+        "- Acidosis or rhabdomyolysis context."
+    ),
+    "lab_hypoglycemia": (
+        "Highlight glucose trajectory, hypoglycemic agent exposure, oral intake, and hepatic / renal function. Prioritize:\n"
+        "- Recent glucose values and trend.\n"
+        "- Insulin / sulfonylurea dosing and recent oral intake (NPO).\n"
+        "- Hepatic and renal function (clearance of agents).\n"
+        "- Sepsis, adrenal insufficiency, or alcohol use."
+    ),
+    "lab_hyponatremia": (
+        "Highlight sodium trajectory, volume status, diuretic use, and SIADH context. Prioritize:\n"
+        "- Recent sodium values and trend.\n"
+        "- Volume status (hypo-/eu-/hypervolemic) and recent fluid orders.\n"
+        "- Thiazide or loop diuretic use, recent vomiting / diarrhea.\n"
+        "- SIADH triggers (CNS event, malignancy, pulmonary disease, SSRI)."
+    ),
+    "lab_anemia": (
+        "Highlight hemoglobin trajectory, recent bleeding, transfusions, marrow-suppressing therapy, and iron / B12 status. Prioritize:\n"
+        "- Recent Hgb / Hct values and trend.\n"
+        "- GI / GU bleeding, surgery, and recent transfusions.\n"
+        "- Marrow-suppressing therapy and renal disease (EPO).\n"
+        "- Iron, ferritin, B12, folate."
+    ),
+    "chexpert": (
+        "Highlight pulmonary symptoms, recent infections, oxygen requirement, prior chest-imaging findings, and cardiac comorbidities. Prioritize:\n"
+        "- Cough, dyspnea, hypoxia, fever.\n"
+        "- Recent pneumonia, COPD/asthma exacerbation, smoking history.\n"
+        "- Heart failure, cardiomegaly, prior chest-imaging abnormalities.\n"
+        "- Oxygen requirement and respiratory therapy."
+    ),
 }
 
 
@@ -92,14 +179,62 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _THORACIC_HORIZON_TASK_TEMPLATES: Dict[str, str] = {
-    "died_any_cause": "Highlight stage at diagnosis, treatment response, performance status, comorbidity burden, and any progression or deterioration relevant to {n}-year overall survival.",
-    "died_of_cancer": "Highlight cancer stage, histology, treatment response, sites of disease, and progression markers relevant to {n}-year cancer-specific mortality.",
-    "died_other_cause": "Highlight non-cancer comorbidities (cardiopulmonary, vascular, frailty), competing causes, and overall medical status — separate from the cancer trajectory — relevant to {n}-year non-cancer mortality.",
-    "has_progression_nonrecurrence": "Highlight current disease status, treatment received, response, and any imaging or biomarker signals of progression within {n} year{s}.",
-    "has_recurrence": "Highlight curative treatment received, response status, surveillance findings, and risk factors for relapse within {n} year{s}.",
-    "has_stable_disease": "Highlight current treatment, recent response, surveillance findings, and stability markers over the {n}-year window.",
-    "is_cured_by_horizon": "Highlight curative treatment, response, recurrence-free interval, and absence of progression markers relevant to cure at the {n}-year horizon.",
-    "progression_recurrence_free_survival": "Highlight stage, curative treatment, surveillance findings, and progression / recurrence markers relevant to {n}-year disease-free survival.",
+    "died_any_cause": (
+        "Highlight stage at diagnosis, treatment response, performance status, comorbidity burden, and any progression or deterioration relevant to {n}-year overall survival. Prioritize:\n"
+        "- Stage, histology, ECOG performance status.\n"
+        "- Treatment received (surgery, chemo, RT, immuno) and response.\n"
+        "- Major non-cancer comorbidities and frailty markers.\n"
+        "- Documented progression, recurrence, or hospitalizations."
+    ),
+    "died_of_cancer": (
+        "Highlight cancer stage, histology, treatment response, sites of disease, and progression markers relevant to {n}-year cancer-specific mortality. Prioritize:\n"
+        "- Stage, histology, molecular markers (EGFR, ALK, PD-L1).\n"
+        "- Treatment course and response (CR / PR / SD / PD).\n"
+        "- Sites of disease and metastatic burden.\n"
+        "- Cancer-attributable complications (effusions, dyspnea, weight loss)."
+    ),
+    "died_other_cause": (
+        "Highlight non-cancer comorbidities, competing causes, and overall medical status — separate from the cancer trajectory — relevant to {n}-year non-cancer mortality. Prioritize:\n"
+        "- Cardiopulmonary disease (CHF, COPD, prior MI, PVD).\n"
+        "- Renal / hepatic disease and frailty / functional decline.\n"
+        "- Non-cancer hospitalizations (sepsis, AKI, cardiac events).\n"
+        "- Performance status independent of cancer status."
+    ),
+    "has_progression_nonrecurrence": (
+        "Highlight current disease status, treatment received, response, and any imaging or biomarker signals of progression within {n} year{s}. Prioritize:\n"
+        "- Current treatment regimen and most recent response.\n"
+        "- Imaging trajectory (new lesions, growth, new sites).\n"
+        "- Biomarker / tumor-marker trends.\n"
+        "- Clinical deterioration or new cancer-related symptoms."
+    ),
+    "has_recurrence": (
+        "Highlight curative treatment received, response status, surveillance findings, and risk factors for relapse within {n} year{s}. Prioritize:\n"
+        "- Curative-intent treatment (surgery, SBRT, chemoradiation) and completion.\n"
+        "- Pathologic stage, margins, nodal status, molecular markers.\n"
+        "- Surveillance imaging findings and biomarker trajectory.\n"
+        "- Smoking, residual disease, or high-risk features."
+    ),
+    "has_stable_disease": (
+        "Highlight current treatment, recent response, surveillance findings, and stability markers over the {n}-year window. Prioritize:\n"
+        "- Current treatment regimen and tolerance.\n"
+        "- Most recent imaging response (SD / PR sustained).\n"
+        "- Stable performance status and absence of new sites.\n"
+        "- Tumor-marker stability."
+    ),
+    "is_cured_by_horizon": (
+        "Highlight curative treatment, response, recurrence-free interval, and absence of progression markers relevant to cure at the {n}-year horizon. Prioritize:\n"
+        "- Curative-intent treatment and completion of planned course.\n"
+        "- Length of recurrence-free interval since treatment.\n"
+        "- Surveillance imaging and biomarker stability.\n"
+        "- Absence of new symptoms or sites of disease."
+    ),
+    "progression_recurrence_free_survival": (
+        "Highlight stage, curative treatment, surveillance findings, and progression / recurrence markers relevant to {n}-year disease-free survival. Prioritize:\n"
+        "- Stage, histology, curative-intent treatment received.\n"
+        "- Surveillance imaging trajectory and biomarker trends.\n"
+        "- Documented progression, recurrence, or new sites.\n"
+        "- Competing-risk events (non-cancer mortality, hospitalization)."
+    ),
 }
 
 for _family, _template in _THORACIC_HORIZON_TASK_TEMPLATES.items():
