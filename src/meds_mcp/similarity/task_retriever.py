@@ -98,12 +98,17 @@ class TaskAwareRetriever:
             items_by_composite: Dict[str, LabeledItem] = {}
             for it in eligible:
                 state = store.get_or_none(it.person_id, it.embed_time)
-                if state is None or not state.vignette.strip():
+                if state is None:
+                    continue
+                # Prefer the task-conditioned vignette when one was precomputed
+                # for this task; fall back to the legacy task-agnostic vignette.
+                vignette = state.vignette_for_task(it.task)
+                if not vignette.strip():
                     continue
                 composite = _composite_id(it.person_id, it.embed_time)
                 if composite in items_by_composite:
                     continue  # defensive: one (pid, task) per row, so one (pid, et) too
-                docs.append({"person_id": composite, "vignette": state.vignette})
+                docs.append({"person_id": composite, "vignette": vignette})
                 items_by_composite[composite] = it
             self._per_task_counts[task] = len(docs)
             if docs:
