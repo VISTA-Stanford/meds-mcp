@@ -1,6 +1,6 @@
 """Secure LLM adapter for vignette summarization."""
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Sequence, Tuple
 from pathlib import Path
 
 from meds_mcp.server.llm import (
@@ -55,19 +55,103 @@ class SecureLLMSummarizer:
             "6) No bullets, no headers, no timeline meta-commentary, no dates, and no administrative details unless clinically relevant."
         )
 
-    def summarize(self, text: str) -> str:
+    @staticmethod
+    def task_focus_suffix(task_description: str) -> str:
+        """System-prompt suffix appended when generating a task-conditioned vignette.
+
+        Kept as a small, stable block so prompt-cache prefixes still hit on the
+        base ``vignette_prompt.txt`` portion across patients within the same task.
+        """
+        return (
+            "\n\nTASK FOCUS\n"
+            "This vignette is being prepared for the following downstream prediction task:\n"
+            f"{task_description.strip()}\n"
+            "Within all rules above, give priority to information that is most "
+            "informative for the task (relevant comorbidities, treatments, lab "
+            "trajectories, prior events, and findings/negatives that bear on the "
+            "task target). Do not invent or speculate — use only what the source "
+            "timeline states. Length, format, demographics rules, no-dates rule, "
+            "and the findings-first requirement are unchanged."
+        )
+
+    @staticmethod
+    def multi_task_focus_suffix(tasks: Sequence[Tuple[str, str]]) -> str:
+        """System-prompt suffix listing every task this vignette will serve.
+
+        Use when one vignette per (patient, embed_time) is reused across many
+        downstream tasks (cheaper than per-task generation but less targeted).
+        ``tasks`` is a sequence of ``(task_name, task_description)`` pairs;
+        order is preserved in the rendered bullet list, so callers should sort
+        upstream for deterministic prompts and prompt-cache stability.
+        """
+        if not tasks:
+            return ""
+        bullets = "\n".join(
+            f"- [{name}] {desc.strip()}" for name, desc in tasks
+        )
+        return (
+            "\n\nTASK FOCUS\n"
+            "This vignette will be reused across the following downstream "
+            "prediction tasks:\n"
+            f"{bullets}\n"
+            "Within all rules above, give priority to information that is "
+            "informative for ANY of these tasks (relevant comorbidities, "
+            "treatments, lab trajectories, prior events, and findings/negatives "
+            "that bear on any task target). Do not invent or speculate — use "
+            "only what the source timeline states. Length, format, demographics "
+            "rules, no-dates rule, and the findings-first requirement are "
+            "unchanged. Do not enumerate the tasks in the vignette itself."
+        )
+
+    def build_system_prompt(
+        self,
+        task_description: Optional[str] = None,
+        tasks: Optional[Sequence[Tuple[str, str]]] = None,
+    ) -> str:
+        """Compose the system prompt for a single call.
+
+        Pass ``task_description`` for a single-task focus block, or ``tasks``
+        for a multi-task focus block. The two are mutually exclusive — supplying
+        both raises ``ValueError`` to avoid silent ambiguity.
+        """
+        if task_description and tasks:
+            raise ValueError(
+                "Pass either task_description (single-task) or tasks "
+                "(multi-task), not both."
+            )
+        if tasks:
+            return self.system_prompt + self.multi_task_focus_suffix(tasks)
+        if task_description and task_description.strip():
+            return self.system_prompt + self.task_focus_suffix(task_description)
+        return self.system_prompt
+
+    def summarize(
+        self,
+        text: str,
+        task_description: Optional[str] = None,
+        tasks: Optional[Sequence[Tuple[str, str]]] = None,
+    ) -> str:
         """Generate a clinical vignette from patient timeline.
 
         Args:
-            text: Patient timeline with clinical events
+            text: Patient timeline with clinical events.
+            task_description: Optional single downstream-task description. When
+                given, a single-task TASK FOCUS block is appended to the system
+                prompt.
+            tasks: Optional sequence of ``(task_name, task_description)`` pairs.
+                When given, a multi-task TASK FOCUS block listing every task is
+                appended instead. Mutually exclusive with ``task_description``.
 
         Returns:
-            Clinical vignette (3-5 sentences)
+            Clinical vignette (4-8 sentences).
         """
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": self.system_prompt},
+                {
+                    "role": "system",
+                    "content": self.build_system_prompt(task_description, tasks),
+                },
                 {"role": "user", "content": text},
             ],
             **self.gen_config,

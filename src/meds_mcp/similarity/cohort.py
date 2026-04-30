@@ -22,10 +22,11 @@ item's ``embed_time``) matching the "one object per (patient, task)" shape.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from types import MappingProxyType
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple, Union
 
 __all__ = [
     "PatientState",
@@ -45,7 +46,14 @@ StateKey = Tuple[str, str]  # (person_id, embed_time)
 
 @dataclass(frozen=True)
 class PatientState:
-    """One vignette-bearing record per (person_id, embed_time)."""
+    """One vignette-bearing record per (person_id, embed_time).
+
+    ``vignette`` is the legacy task-agnostic summary. ``task_vignettes`` holds
+    optional per-task summaries (task name -> vignette text) produced when
+    precompute is run with task-conditioned generation. Use
+    ``vignette_for_task(task)`` to read a vignette without callers needing to
+    know which mode produced the corpus.
+    """
 
     person_id: str
     embed_time: str
@@ -58,13 +66,29 @@ class PatientState:
     # cohort. Default False; loaded from existing patients.jsonl without
     # breakage.
     vignette_input_was_truncated: bool = False
+    # Per-task vignettes keyed by task name. Empty when precompute was run in
+    # the legacy task-agnostic mode. Stored as a plain dict on disk; held as
+    # an immutable mapping in memory because PatientState is frozen.
+    task_vignettes: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def key(self) -> StateKey:
         return (self.person_id, self.embed_time)
 
+    def vignette_for_task(self, task: str) -> str:
+        """Return the task-specific vignette if present, else the legacy one."""
+        v = self.task_vignettes.get(task)
+        if v and v.strip():
+            return v
+        return self.vignette
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "PatientState":
+        raw = d.get("task_vignettes") or {}
+        # Accept dict-of-strings; coerce keys/values to str defensively.
+        task_vignettes = MappingProxyType(
+            {str(k): str(v) for k, v in raw.items() if str(v).strip()}
+        )
         return cls(
             person_id=str(d["person_id"]),
             embed_time=str(d.get("embed_time", "") or ""),
@@ -72,10 +96,20 @@ class PatientState:
             vignette=str(d.get("vignette", "") or ""),
             created_at=str(d.get("created_at", "") or ""),
             vignette_input_was_truncated=bool(d.get("vignette_input_was_truncated", False)),
+            task_vignettes=task_vignettes,
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        # asdict can't traverse MappingProxyType; serialize the dict ourselves.
+        return {
+            "person_id": self.person_id,
+            "embed_time": self.embed_time,
+            "split": self.split,
+            "vignette": self.vignette,
+            "created_at": self.created_at,
+            "vignette_input_was_truncated": self.vignette_input_was_truncated,
+            "task_vignettes": dict(self.task_vignettes),
+        }
 
 
 @dataclass(frozen=True)
