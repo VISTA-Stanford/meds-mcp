@@ -72,19 +72,8 @@ def main() -> None:
         nargs="+",
         default=None,
         help=(
-            "When --per-task or --all-tasks-focus is set, restrict generation "
-            "to these task names (must appear in TASK_DESCRIPTIONS). Default: "
-            "all tasks present in items.jsonl."
-        ),
-    )
-    parser.add_argument(
-        "--all-tasks-focus",
-        action="store_true",
-        help=(
-            "Generate ONE vignette per (person_id, embed_time) but condition "
-            "the system prompt on EVERY unique task in items.jsonl (filtered "
-            "by TASK_DESCRIPTIONS and optionally --tasks). Result is stored "
-            "in PatientState.vignette. Mutually exclusive with --per-task."
+            "When --per-task is set, restrict generation to these task names "
+            "(must appear in TASK_DESCRIPTIONS). Default: all tasks."
         ),
     )
     parser.add_argument("--model", type=str, default="gemini-2.5-flash")
@@ -101,8 +90,6 @@ def main() -> None:
         default="gs://vista_bench/temp/pinnacle_templated_summaries/output/vignette_batch",
     )
     args = parser.parse_args()
-    if args.per_task and args.all_tasks_focus:
-        raise SystemExit("--per-task and --all-tasks-focus are mutually exclusive.")
 
     from google.cloud import storage
     import vertexai
@@ -211,41 +198,6 @@ def main() -> None:
                 }
             )
     else:
-        # Compose the system prompt once. In --all-tasks-focus mode, append a
-        # multi-task TASK FOCUS block listing every unique task from
-        # items.jsonl (intersected with TASK_DESCRIPTIONS, optionally filtered
-        # by --tasks). Otherwise it stays task-agnostic.
-        effective_system_prompt = system_prompt
-        if args.all_tasks_focus:
-            if args.tasks:
-                unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
-                if unknown:
-                    raise SystemExit(
-                        f"Unknown task name(s) for --tasks: {unknown}. "
-                        f"Known: {sorted(TASK_DESCRIPTIONS)}"
-                    )
-                allowed_tasks = set(args.tasks)
-            else:
-                allowed_tasks = set(TASK_DESCRIPTIONS)
-            present_tasks = sorted(
-                t for t in set(store.tasks()) if t in allowed_tasks
-            )
-            if not present_tasks:
-                raise SystemExit(
-                    "No tasks in items.jsonl match TASK_DESCRIPTIONS "
-                    f"(filter={sorted(allowed_tasks)})."
-                )
-            multi_task_focus = [(t, TASK_DESCRIPTIONS[t]) for t in present_tasks]
-            effective_system_prompt = (
-                system_prompt
-                + SecureLLMSummarizer.multi_task_focus_suffix(multi_task_focus)
-            )
-            logger.info(
-                "ALL-TASKS-FOCUS mode: %d task(s) injected into TASK FOCUS block: %s",
-                len(multi_task_focus),
-                present_tasks,
-            )
-
         todo = [
             p for p in store.patient_states()
             if (args.force or not p.vignette.strip())
@@ -278,7 +230,7 @@ def main() -> None:
             requests.append(
                 {
                     "request": {
-                        "system_instruction": {"parts": [{"text": effective_system_prompt}]},
+                        "system_instruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_text}]}],
                         "generationConfig": {
                             "temperature": 0.2,

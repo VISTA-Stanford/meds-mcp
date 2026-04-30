@@ -129,6 +129,74 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
     ),
 }
 
+
+# ---------------------------------------------------------------------------
+# Thoracic-oncology outcome tasks present in
+# experiments/fewshot_with_labels/outputs/items.jsonl. Eight task families,
+# each emitted at 1-, 2-, 3-, 4-, and 5-year horizons. Descriptions are
+# extended into TASK_DESCRIPTIONS programmatically so the 40 entries stay
+# consistent — change a template here and every horizon updates together.
+# ---------------------------------------------------------------------------
+
+_THORACIC_HORIZON_TASK_TEMPLATES: Dict[str, str] = {
+    "died_any_cause": (
+        "This is a probabilistic model trained to predict whether the patient "
+        "will die from any cause within {n} year{s} of the prediction time "
+        "(all-cause mortality). The assistant may use this tool when overall "
+        "survival risk over a {n}-year horizon would inform reasoning."
+    ),
+    "died_of_cancer": (
+        "This is a probabilistic model trained to predict cancer-specific "
+        "mortality — whether the patient will die of their malignancy within "
+        "{n} year{s} of the prediction time. Use when disease-specific "
+        "survival risk supports the reasoning, distinct from death from "
+        "competing causes."
+    ),
+    "died_other_cause": (
+        "This is a probabilistic model trained to predict death from a "
+        "non-cancer cause within {n} year{s} of the prediction time "
+        "(competing-risk mortality). Use when distinguishing cancer-attributable "
+        "death from death from other causes is clinically relevant."
+    ),
+    "has_progression_nonrecurrence": (
+        "This is a probabilistic model trained to predict disease progression "
+        "(in the absence of a documented recurrence event) within {n} year{s} "
+        "of the prediction time. Use when progression-only risk — independent "
+        "of relapse — is the relevant outcome."
+    ),
+    "has_recurrence": (
+        "This is a probabilistic model trained to predict cancer recurrence "
+        "within {n} year{s} of the prediction time. Use when relapse risk "
+        "would inform downstream reasoning about surveillance, adjuvant "
+        "therapy, or prognosis."
+    ),
+    "has_stable_disease": (
+        "This is a probabilistic model trained to predict whether the patient "
+        "will have stable disease at the {n}-year horizon — alive with neither "
+        "progression nor recurrence documented during the {n}-year window."
+    ),
+    "is_cured_by_horizon": (
+        "This is a probabilistic model trained to predict whether the patient "
+        "is cured by the {n}-year horizon — alive with no documented "
+        "recurrence and no documented progression within {n} year{s} of the "
+        "prediction time. Use when cure probability is clinically actionable."
+    ),
+    "progression_recurrence_free_survival": (
+        "This is a probabilistic model trained to predict progression- and "
+        "recurrence-free survival at the {n}-year horizon — whether the "
+        "patient remains alive without documented progression or recurrence "
+        "within {n} year{s} of the prediction time."
+    ),
+}
+
+for _family, _template in _THORACIC_HORIZON_TASK_TEMPLATES.items():
+    for _n in (1, 2, 3, 4, 5):
+        TASK_DESCRIPTIONS[f"{_family}_{_n}_yr"] = _template.format(
+            n=_n, s="" if _n == 1 else "s",
+        )
+
+del _family, _template, _n
+
 # Task -> clause for tool description: "the likelihood that {phrase}" (no "whether").
 TASK_TOOL_RETURNS: Dict[str, str] = {
     "guo_icu": "the specified patient will require ICU admission within 24 hours of the provided prediction time",

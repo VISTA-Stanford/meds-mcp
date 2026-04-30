@@ -173,27 +173,12 @@ def main() -> None:
         nargs="+",
         default=None,
         help=(
-            "When --per-task or --all-tasks-focus is set, restrict generation "
-            "to these task names (must appear in TASK_DESCRIPTIONS). Default: "
-            "every task present in the items file."
-        ),
-    )
-    parser.add_argument(
-        "--all-tasks-focus",
-        action="store_true",
-        help=(
-            "Generate ONE vignette per (person_id, embed_time) but condition "
-            "the system prompt on EVERY unique task in items.jsonl (intersected "
-            "with TASK_DESCRIPTIONS, optionally filtered by --tasks). The LLM "
-            "is told the same vignette will be reused across all listed tasks "
-            "so it should weave in details informative for any of them. Result "
-            "is stored in PatientState.vignette. Mutually exclusive with "
-            "--per-task."
+            "When --per-task is set, restrict generation to these task names "
+            "(must appear in TASK_DESCRIPTIONS). Default: every task present "
+            "in the items file."
         ),
     )
     args = parser.parse_args()
-    if args.per_task and args.all_tasks_focus:
-        raise SystemExit("--per-task and --all-tasks-focus are mutually exclusive.")
 
     # Derive / validate the token-budget configuration before any LLM call.
     effective_budget = effective_input_budget(
@@ -246,38 +231,6 @@ def main() -> None:
     summarizer = pipeline.summarizer
     base_generator = pipeline.base_generator
     assert summarizer is not None
-
-    # When generating in either task-aware mode, resolve the allowed-task set
-    # up front so failures surface before any LLM call.
-    multi_task_focus: List[Tuple[str, str]] = []
-    if args.all_tasks_focus:
-        if args.tasks:
-            unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
-            if unknown:
-                raise SystemExit(
-                    f"Unknown task name(s) for --tasks: {unknown}. "
-                    f"Known: {sorted(TASK_DESCRIPTIONS)}"
-                )
-            allowed_tasks = set(args.tasks)
-        else:
-            allowed_tasks = set(TASK_DESCRIPTIONS)
-        # Take every unique task in items.jsonl that has a description and
-        # passes the optional --tasks filter. Sorted for determinism so the
-        # rendered prompt is byte-stable across runs (good for caching).
-        present_tasks = sorted(
-            t for t in set(store.tasks()) if t in allowed_tasks
-        )
-        if not present_tasks:
-            raise SystemExit(
-                "No tasks in items.jsonl match TASK_DESCRIPTIONS "
-                f"(filter={sorted(allowed_tasks)})."
-            )
-        multi_task_focus = [(t, TASK_DESCRIPTIONS[t]) for t in present_tasks]
-        logger.info(
-            "ALL-TASKS-FOCUS mode: %d task(s) injected into TASK FOCUS block: %s",
-            len(multi_task_focus),
-            present_tasks,
-        )
 
     # Per-task: figure out which tasks are in scope, and build the
     # (state_key -> [tasks needing a vignette]) plan up front. We share one
@@ -389,7 +342,6 @@ def main() -> None:
     def _summarize_with_retry(
         text: str, pid: str, et: str,
         task_description: str | None = None,
-        tasks: list[Tuple[str, str]] | None = None,
     ) -> tuple[str | None, int, bool]:
         """Return (vignette_or_None, attempts_used, shrunk).
 
@@ -414,11 +366,7 @@ def main() -> None:
         for attempt in range(args.max_retries + 1):
             try:
                 return (
-                    summarizer.summarize(
-                        current,
-                        task_description=task_description,
-                        tasks=tasks,
-                    ),
+                    summarizer.summarize(current, task_description=task_description),
                     attempt,
                     shrunk,
                 )
@@ -545,8 +493,7 @@ def main() -> None:
             store.save(args.patients, args.items)
         else:
             vignette, attempts_used, was_shrunk = _summarize_with_retry(
-                text, p.person_id, p.embed_time,
-                tasks=multi_task_focus or None,
+                text, p.person_id, p.embed_time
             )
             n_retries_used += attempts_used
 
