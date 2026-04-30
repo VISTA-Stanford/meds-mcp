@@ -283,6 +283,26 @@ TASK_PREDICTION_TARGET: Dict[str, str] = {
     "chexpert": "will have chest imaging showing an abnormal finding",
 }
 
+# Task -> short direct question for vignette-generation prompt (TASK_QUESTION placeholder).
+# These are the concise "Will the patient..." forms stored in item.question at cohort-build time.
+TASK_VIGNETTE_QUESTIONS: Dict[str, str] = {
+    "guo_readmission": "Will the patient be readmitted to the hospital within 30 days?",
+    "guo_icu": "Will the patient be transferred to the intensive care unit?",
+    "guo_los": "Will the patient stay in the hospital for more than 7 days?",
+    "lab_thrombocytopenia": "Will the patient's thrombocytopenia lab come back as abnormal?",
+    "lab_hyperkalemia": "Will the patient's hyperkalemia lab come back as abnormal?",
+    "lab_hypoglycemia": "Will the patient's hypoglycemia lab come back as abnormal?",
+    "lab_hyponatremia": "Will the patient's hyponatremia lab come back as abnormal?",
+    "lab_anemia": "Will the patient's anemia lab come back as abnormal?",
+    "new_hypertension": "Will the patient develop hypertension in the next year?",
+    "new_hyperlipidemia": "Will the patient develop hyperlipidemia in the next year?",
+    "new_pancan": "Will the patient develop pancreatic cancer in the next year?",
+    "new_celiac": "Will the patient develop celiac disease in the next year?",
+    "new_lupus": "Will the patient develop lupus in the next year?",
+    "new_acutemi": "Will the patient develop an acute myocardial infarction in the next year?",
+    "chexpert": "Will the patient's chest X-ray come back as abnormal?",
+}
+
 # Task -> question template (one patient). All questions are binary (yes/no).
 TASK_QUESTIONS: Dict[str, str] = {
     "guo_readmission": "Based on this patient's health status and discharge profile, is it likely they will require rehospitalization soon after discharge?",

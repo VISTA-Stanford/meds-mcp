@@ -87,6 +87,7 @@ CohortStore = _cohort.CohortStore
 DeterministicTimelineLinearizationGenerator = _det.DeterministicTimelineLinearizationGenerator
 demographics_block = _det.demographics_block
 TASK_DESCRIPTIONS = _tc.TASK_DESCRIPTIONS
+TASK_VIGNETTE_QUESTIONS = _tc.TASK_VIGNETTE_QUESTIONS
 
 from experiments.fewshot_with_labels import _paths
 
@@ -141,8 +142,9 @@ def main() -> None:
         )
     item = matches[0]
 
+    task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(args.task, "")
     system_prompt = _load_template().format(
-        TASK_QUESTION=item.question.strip(),
+        TASK_QUESTION=task_question,
         TASK_FOCUS=TASK_DESCRIPTIONS[args.task].strip(),
     )
 

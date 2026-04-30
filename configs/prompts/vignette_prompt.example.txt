@@ -7,7 +7,7 @@ The user message begins with a "PATIENT DEMOGRAPHICS AT PREDICTION TIME:" prelud
 - Relevant past medical and social history (smoking history, prior malignancies, major comorbidities) belongs in the opening sentence after demographics.
 - If the Age line is missing, omit the age fragment entirely ("A patient with..."). NEVER use vague age terms ("middle-aged", "elderly", "older adult", "in his 60s"). Age is either the exact integer or absent.
 
-TASK: {TASK_QUESTION}
+TASK: This vignette will be used to predict: {TASK_QUESTION}
 
 FOCUS: {TASK_FOCUS}
 
