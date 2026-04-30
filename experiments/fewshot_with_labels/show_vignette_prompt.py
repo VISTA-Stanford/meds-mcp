@@ -10,8 +10,18 @@ if present). The user message is the deterministic linearized timeline
 (demographics + events) up to the item's embed_time.
 
 Examples:
+  # Print to stdout
   uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
     --person-id 135908719 --task has_recurrence_1_yr
+
+  # Write to a specific file
+  uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
+    --person-id 135908719 --task has_recurrence_1_yr \\
+    --out /tmp/prompt.txt
+
+  # Auto-named file in cwd: vignette_prompt_<pid>_<task>.txt
+  uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
+    --person-id 135908719 --task has_recurrence_1_yr --export
 """
 
 from __future__ import annotations
@@ -98,6 +108,20 @@ def main() -> None:
     parser.add_argument("--patients", type=Path, default=_paths.patients_jsonl())
     parser.add_argument("--items", type=Path, default=_paths.items_jsonl())
     parser.add_argument("--corpus-dir", type=Path, default=_paths.corpus_dir())
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Write the rendered prompt to this path instead of stdout.",
+    )
+    parser.add_argument(
+        "--export",
+        action="store_true",
+        help=(
+            "Write to an auto-named file vignette_prompt_<pid>_<task>.txt in "
+            "the current directory. Ignored when --out is also given."
+        ),
+    )
     args = parser.parse_args()
 
     if args.task not in TASK_DESCRIPTIONS:
@@ -131,17 +155,35 @@ def main() -> None:
     )
     user_msg = (demos + "\n" + timeline) if demos else timeline
 
-    print("=" * 80)
-    print(f"PID  : {args.person_id}")
-    print(f"TASK : {args.task}")
-    print(f"EMBED: {item.embed_time}")
-    print(f"LABEL: {item.label} ({item.label_description})")
-    print("=" * 80)
-    print("\n[SYSTEM PROMPT]\n")
-    print(system_prompt)
-    print("\n" + "=" * 80)
-    print(f"[USER MESSAGE]  ({len(user_msg)} chars)\n")
-    print(user_msg)
+    sections = [
+        "=" * 80,
+        f"PID  : {args.person_id}",
+        f"TASK : {args.task}",
+        f"EMBED: {item.embed_time}",
+        f"LABEL: {item.label} ({item.label_description})",
+        "=" * 80,
+        "",
+        "[SYSTEM PROMPT]",
+        "",
+        system_prompt,
+        "",
+        "=" * 80,
+        f"[USER MESSAGE]  ({len(user_msg)} chars)",
+        "",
+        user_msg,
+    ]
+    output = "\n".join(sections)
+
+    out_path = args.out
+    if out_path is None and args.export:
+        out_path = Path.cwd() / f"vignette_prompt_{args.person_id}_{args.task}.txt"
+
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output)
+        print(f"Wrote {len(output)} chars to {out_path}")
+    else:
+        print(output)
 
 
 if __name__ == "__main__":
