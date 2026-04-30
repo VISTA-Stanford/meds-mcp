@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Print the vignette-generation prompt (system + user message) for a single
-(person_id, task) pair. Does NOT call the LLM.
+Print the vignette-generation prompt and precomputed vignette for a single
+(person_id, task) pair.
 
-Pulls the task question from outputs/items.jsonl and the task focus from
-``TASK_DESCRIPTIONS``, then renders the template at
-``configs/prompts/vignette_prompt.example.txt`` (or ``vignette_prompt.txt``
-if present). The user message is the deterministic linearized timeline
-(demographics + events) up to the item's embed_time.
+Shows:
+  1. The system prompt (vignette generation template filled with task question
+     and focus).
+  2. The precomputed vignette stored in patients.jsonl (if present), or
+     "[no vignette precomputed]" if the vignette field is empty.
+
+Pass --show-timeline to also print the raw LUMIA linearization that was used
+as the LLM user message (requires --corpus-dir).
 
 Examples:
   # Print to stdout
@@ -22,6 +25,9 @@ Examples:
   # Auto-named file in cwd: vignette_prompt_<pid>_<task>.txt
   uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
     --person-id 135908719 --task has_recurrence_1_yr --export
+    --person-id 115973549 --task guo_readmission \\
+    --patients experiments/fewshot_with_labels/outputs/ehrshot/patients.jsonl \\
+    --items experiments/fewshot_with_labels/outputs/ehrshot/items.jsonl
 """
 
 from __future__ import annotations
@@ -123,6 +129,11 @@ def main() -> None:
             "the current directory. Ignored when --out is also given."
         ),
     )
+    parser.add_argument(
+        "--show-timeline",
+        action="store_true",
+        help="Also print the raw LUMIA linearization (requires --corpus-dir).",
+    )
     args = parser.parse_args()
 
     if args.task not in TASK_DESCRIPTIONS:
@@ -142,20 +153,14 @@ def main() -> None:
         )
     item = matches[0]
 
+    cohort_item = store.join(args.person_id, args.task)
+    vignette = cohort_item.state.vignette_for_task(args.task)
+
     task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(args.task, "")
     system_prompt = _load_template().format(
         TASK_QUESTION=task_question,
         TASK_FOCUS=TASK_DESCRIPTIONS[args.task].strip(),
     )
-
-    gen = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
-    timeline = gen.generate(args.person_id, cutoff_date=item.embed_time)
-    demos = demographics_block(
-        xml_dir=str(args.corpus_dir),
-        patient_id=args.person_id,
-        cutoff_date=item.embed_time,
-    )
-    user_msg = (demos + "\n" + timeline) if demos else timeline
 
     sections = [
         "=" * 80,
@@ -186,6 +191,30 @@ def main() -> None:
         print(f"Wrote {len(output)} chars to {out_path}")
     else:
         print(output)
+    print("=" * 80)
+    print(f"PID  : {args.person_id}")
+    print(f"TASK : {args.task}")
+    print(f"EMBED: {item.embed_time}")
+    print(f"LABEL: {item.label} ({item.label_description})")
+    print("=" * 80)
+    print("\n[VIGNETTE GENERATION PROMPT]\n")
+    print(system_prompt)
+    print("\n" + "=" * 80)
+    print("\n[GENERATED VIGNETTE]\n")
+    print(vignette if vignette.strip() else "[no vignette precomputed]")
+
+    if args.show_timeline:
+        gen = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
+        timeline = gen.generate(args.person_id, cutoff_date=item.embed_time)
+        demos = demographics_block(
+            xml_dir=str(args.corpus_dir),
+            patient_id=args.person_id,
+            cutoff_date=item.embed_time,
+        )
+        user_msg = (demos + "\n" + timeline) if demos else timeline
+        print("\n" + "=" * 80)
+        print(f"\n[RAW LUMIA TIMELINE]  ({len(user_msg)} chars)\n")
+        print(user_msg)
 
 
 if __name__ == "__main__":
