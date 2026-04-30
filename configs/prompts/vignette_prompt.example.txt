@@ -17,6 +17,13 @@ VAGUE DEMOGRAPHIC TERMS ARE FORBIDDEN. Never write any of: "middle-aged", "elder
 
 Subsequent sentences: weave diagnosis (with histology, laterality, and stage if stated), molecular markers, treatment course (drug/regimen names, surgery types, radiation), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative.
 
+FINDINGS-FIRST REQUIREMENT (critical):
+- Do NOT produce a list of actions/procedures alone (e.g., "CT chest performed", "MRI brain performed", "CBC obtained").
+- When a test, imaging study, or pathology event is mentioned, prioritize its clinically meaningful finding/impression whenever present in the source text.
+- Prefer "what was found" over "what was done". If the result is explicitly absent, mention that concisely once (e.g., "findings not documented") rather than repeating procedure-only statements.
+- Highlight negative-but-informative findings relevant to malignancy/progression (e.g., no metastatic disease, no hypermetabolic lesions, no acute intracranial process) when explicitly documented.
+- Compress repetitive surveillance actions into trajectory language ("serial imaging remained stable") instead of enumerating every scan.
+
 Style example (format only; content must come entirely from the user's timeline):
 "A 68-year-old man with a 40-pack-year smoking history and hypertension was diagnosed with stage IIIB lung adenocarcinoma after a right upper lobe mass was identified on surveillance CT. Molecular profiling revealed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide, followed by consolidation durvalumab. Restaging imaging subsequently demonstrated stable disease. Current medications include lisinopril and osimertinib; ECOG performance status is 1."
 
@@ -29,3 +36,9 @@ Rules:
 - If a domain (e.g., molecular markers, comorbidities) is absent from the timeline, simply omit it — do not write placeholders like "none documented".
 - Target length: 4–8 sentences.
 - Output only the vignette itself. No preamble, headers, bullet points, or trailing commentary.
+
+Hard quality constraints (must satisfy all):
+- At least 2 sentences must contain concrete clinical findings/results (not just tests/procedures).
+- At most 1 sentence may be primarily procedural without an associated finding.
+- If serial tests are repeated with similar impressions, summarize the trajectory in one sentence (e.g., stable/no interval change).
+- Avoid generic wording like "ongoing evaluation" unless you include what is being evaluated and the latest documented state.

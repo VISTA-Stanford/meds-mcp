@@ -63,6 +63,25 @@ def main() -> None:
         action="store_true",
         help="Only sample patients that have at least one LabeledItem after filtering.",
     )
+    parser.add_argument(
+        "--stratify-task",
+        type=str,
+        default=None,
+        help=(
+            "When set, sample patients stratified by binary label (0/1) for this task. "
+            "Selects --n-per-label patients from each label class. "
+            "Patients without a valid label for this task are excluded from the stratified pool."
+        ),
+    )
+    parser.add_argument(
+        "--n-per-label",
+        type=int,
+        default=None,
+        help=(
+            "Patients per label class when --stratify-task is set. "
+            "Default: --n // number_of_label_classes (e.g. 50 each for binary)."
+        ),
+    )
     args = parser.parse_args()
 
     store = CohortStore.load(args.patients, args.items)
@@ -82,9 +101,51 @@ def main() -> None:
         eligible_set.add(p.person_id)
     eligible_ids = sorted(eligible_set)
 
+    rng = random.Random(args.seed)
+
     if args.all:
         chosen = eligible_ids
         pool_tag = "all"
+    elif args.stratify_task:
+        # Stratified sampling: sample evenly across label classes for one task.
+        label_groups: dict[int, list[str]] = {}
+        for pid in eligible_ids:
+            items = [
+                it
+                for it in store.items_for_patient(pid)
+                # Only look at items from the same split being sampled (test),
+                # so train-split labels never influence test-pool stratification.
+                if it.task == args.stratify_task and it.label != -1 and it.split == args.split
+            ]
+            if not items:
+                continue
+            label = int(items[0].label)
+            label_groups.setdefault(label, []).append(pid)
+
+        n_classes = len(label_groups)
+        if n_classes == 0:
+            logger.error("No patients with a valid label for task=%s in split=%s", args.stratify_task, args.split)
+            return
+
+        n_per_label = args.n_per_label or (args.n // n_classes)
+        chosen = []
+        for label in sorted(label_groups):
+            pids = sorted(label_groups[label])
+            if len(pids) < n_per_label:
+                logger.warning(
+                    "Label %d for task=%s has only %d patients (requested %d); taking all.",
+                    label, args.stratify_task, len(pids), n_per_label,
+                )
+                chosen.extend(pids)
+            else:
+                chosen.extend(sorted(rng.sample(pids, n_per_label)))
+        chosen = sorted(chosen)
+        pool_tag = str(args.n)
+        logger.info(
+            "Stratified pool for task=%s: %s",
+            args.stratify_task,
+            {label: len(label_groups[label]) for label in sorted(label_groups)},
+        )
     elif len(eligible_ids) < args.n:
         logger.warning(
             "Only %d eligible patients in split=%s (requested %d); returning all.",
@@ -95,7 +156,6 @@ def main() -> None:
         chosen = eligible_ids
         pool_tag = str(args.n)
     else:
-        rng = random.Random(args.seed)
         chosen = sorted(rng.sample(eligible_ids, args.n))
         pool_tag = str(args.n)
 
@@ -113,9 +173,11 @@ def main() -> None:
         "n_requested": None if args.all else args.n,
         "n_chosen": len(chosen),
         "n_eligible": len(eligible_ids),
-        "seed": None if args.all else args.seed,
+        "seed": None if (args.all or args.stratify_task) else args.seed,
         "require_vignette": args.require_vignette,
         "require_item": args.require_item,
+        "stratify_task": args.stratify_task,
+        "n_per_label": args.n_per_label,
         "patients_source": str(args.patients),
         "items_source": str(args.items),
     }
