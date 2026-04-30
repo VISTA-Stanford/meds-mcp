@@ -134,16 +134,37 @@ class PromptRenderResult:
     query_truncated: bool
 
 
+def _render_task_header(question: str) -> str:
+    """Top-of-prompt instructions, task-specific via the question text."""
+    return (
+        "TASK:\n"
+        "For each patient, answer the following question using only their "
+        "clinical summary:\n"
+        f"\"{question}\"\n"
+        "Respond with exactly \"Yes\" or \"No\"."
+    )
+
+
+def _render_query_block(query_text: str, question: str) -> str:
+    """Render the unanswered NEW PATIENT block (the row we're predicting)."""
+    return (
+        f"PATIENT:\n{query_text}\n\n"
+        f"QUESTION: {question}\n"
+        f"Answer:"
+    )
+
+
 def _render_neighbor_block(
     neighbor: SimilarNeighbor,
     *,
     context: str,
+    question: str,
     base_generator: DeterministicTimelineLinearizationGenerator,
     n_encounters: int,
     max_chars: int,
     xml_dir: Optional[str] = None,
 ) -> Optional[str]:
-    """Render a single similar-patient block. Returns None if rendering fails
+    """Render one few-shot example block. Returns None if rendering fails
     (e.g. missing XML) — caller should skip that neighbor."""
     answer = label_to_yesno(neighbor.item.label)
     if context == "vignette":
@@ -170,16 +191,45 @@ def _render_neighbor_block(
                 neighbor_text = demos + "\n" + neighbor_text
     else:
         raise ValueError(f"Unknown context for neighbor rendering: {context!r}")
-    return f"SIMILAR PATIENT INFORMATION:\n{neighbor_text}\nANSWER: {answer}"
+    return (
+        f"PATIENT:\n{neighbor_text}\n\n"
+        f"QUESTION: {question}\n"
+        f"Answer: {answer}"
+    )
 
 
-def _assemble_prompt(query_block: str, question_block: str, neighbor_blocks: list[str]) -> str:
-    """Concatenate the prompt pieces in the canonical order."""
-    if not neighbor_blocks:
-        return f"{query_block}\n{question_block}"
-    similars_block = "\n\n".join(neighbor_blocks)
-    # Canonical layout: query info -> question -> exemplars.
-    return f"{query_block}\n{question_block}\n{similars_block}"
+def _assemble_prompt(
+    task_header: str,
+    query_block: str,
+    example_blocks: list[str],
+) -> str:
+    """Compose the full user prompt:
+
+        TASK: ...
+
+        EXAMPLES:
+        <example1>
+
+        <example2>
+
+        ---
+
+        NEW PATIENT:
+
+        <query>
+
+    The EXAMPLES / divider section is omitted entirely when there are no
+    examples (baseline_* contexts).
+    """
+    if not example_blocks:
+        return f"{task_header}\n\nNEW PATIENT:\n\n{query_block}"
+    examples = "\n\n".join(example_blocks)
+    return (
+        f"{task_header}\n\n"
+        f"EXAMPLES:\n\n{examples}\n\n"
+        f"---\n\n"
+        f"NEW PATIENT:\n\n{query_block}"
+    )
 
 
 def build_prompt(
@@ -221,19 +271,20 @@ def build_prompt(
     else:
         raise ValueError(f"Unknown context: {context!r}")
 
-    query_block = f"QUERY PATIENT INFORMATION:\n{query_text}\n"
-    question_block = f"QUESTION:\n{question}\n"
+    task_header = _render_task_header(question)
+    query_block = _render_query_block(query_text, question)
 
-    # 2) Render every neighbor block ONCE up front (critical: never re-generate
+    # 2) Render every example block ONCE up front (critical: never re-generate
     #    timelines inside a trim loop). Track which pid produced each block so
     #    we can report drops.
     neighbor_pids: list[str] = []
-    neighbor_blocks: list[str] = []
+    example_blocks: list[str] = []
     if context in WITH_SIMILARS:
         for n in neighbors:
             block = _render_neighbor_block(
                 n,
                 context=context,
+                question=question,
                 base_generator=base_generator,
                 n_encounters=n_encounters,
                 max_chars=max_chars,
@@ -242,10 +293,10 @@ def build_prompt(
             if block is None:
                 continue
             neighbor_pids.append(n.patient.person_id)
-            neighbor_blocks.append(block)
+            example_blocks.append(block)
 
     # 3) Assemble candidate prompt and measure.
-    prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+    prompt = _assemble_prompt(task_header, query_block, example_blocks)
     tokens_before_trim = count_tokens(prompt)
     dropped_ids: list[str] = []
     query_truncated = False
@@ -259,29 +310,29 @@ def build_prompt(
                 f"({system_tokens}); no budget left for the user prompt."
             )
 
-        # 4a) Drop largest neighbor until fits or no neighbors left.
-        while neighbor_blocks and count_tokens(prompt) > budget:
-            sizes = [count_tokens(b) for b in neighbor_blocks]
+        # 4a) Drop largest example block until fits or none left.
+        while example_blocks and count_tokens(prompt) > budget:
+            sizes = [count_tokens(b) for b in example_blocks]
             idx = max(range(len(sizes)), key=lambda i: sizes[i])
             dropped_ids.append(neighbor_pids[idx])
-            del neighbor_blocks[idx]
+            del example_blocks[idx]
             del neighbor_pids[idx]
-            prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+            prompt = _assemble_prompt(task_header, query_block, example_blocks)
 
-        # 4b) If still over, truncate the query block itself.
+        # 4b) If still over, truncate the query patient text itself.
         if count_tokens(prompt) > budget:
-            # Compute the budget available to the query block alone:
-            #   budget - question_block_tokens - similars_block_tokens - framing_tokens
-            non_query = _assemble_prompt("", question_block, neighbor_blocks)
+            # Overhead = task header + EXAMPLES section + NEW PATIENT framing
+            # (PATIENT:, QUESTION:, Answer:). Compute by rendering with an
+            # empty query text and subtracting from the budget.
+            empty_query_block = _render_query_block("", question)
+            non_query = _assemble_prompt(task_header, empty_query_block, example_blocks)
             overhead_tokens = count_tokens(non_query)
-            # Leave a small tail buffer for the framing lines the joins add.
             query_budget = max(64, budget - overhead_tokens - 16)
-            # truncate_to_tokens operates on the inner text, not the header line.
             new_query_text, _orig, was_trunc = truncate_to_tokens(query_text, query_budget)
             if was_trunc:
                 query_truncated = True
-                query_block = f"QUERY PATIENT INFORMATION:\n{new_query_text}\n"
-                prompt = _assemble_prompt(query_block, question_block, neighbor_blocks)
+                query_block = _render_query_block(new_query_text, question)
+                prompt = _assemble_prompt(task_header, query_block, example_blocks)
 
     tokens_total = count_tokens(prompt)
     return PromptRenderResult(
@@ -392,6 +443,17 @@ def main() -> None:
         help="Similar patients to retrieve. Ignored for baseline_* contexts.",
     )
     parser.add_argument(
+        "--retrieval-mode",
+        choices=("balanced", "topk"),
+        default="balanced",
+        help=(
+            "How to choose the top-k similar patients. 'balanced' (default) "
+            "splits the slots across Yes/No labels (floor(k/2) + ceil(k/2)) "
+            "so the LLM sees both classes; 'topk' returns the score-ordered "
+            "top-k regardless of label. Ignored for baseline_* contexts."
+        ),
+    )
+    parser.add_argument(
         "--n-encounters",
         type=int,
         default=0,
@@ -469,6 +531,11 @@ def main() -> None:
             logger.warning(
                 "--top-k is ignored for --context=%s (no similars shown). "
                 "Proceeding with no retrieval.",
+                context,
+            )
+        if "--retrieval-mode" in sys.argv:
+            logger.warning(
+                "--retrieval-mode is ignored for --context=%s (no similars shown).",
                 context,
             )
         effective_top_k: Optional[int] = None
@@ -643,6 +710,7 @@ def main() -> None:
                         task=item.task,
                         top_k=effective_top_k if effective_top_k is not None else args.top_k,
                         exclude_pid=pid,
+                        class_balanced=(args.retrieval_mode == "balanced"),
                     )
 
                 render = build_prompt(
@@ -722,6 +790,9 @@ def main() -> None:
                     "similar_labels": [label_to_yesno(n.item.label) for n in kept_neighbors],
                     "similar_scores": [n.score for n in kept_neighbors],
                     "top_k": effective_top_k,
+                    "retrieval_mode": (
+                        args.retrieval_mode if context in WITH_SIMILARS else None
+                    ),
                     "model": args.model,
                     "seed": args.seed,
                     "temperature": args.temperature,
@@ -776,6 +847,9 @@ def main() -> None:
         "seed": args.seed,
         "temperature": args.temperature,
         "top_k": effective_top_k,
+        "retrieval_mode": (
+            args.retrieval_mode if context in WITH_SIMILARS else None
+        ),
         "n_encounters": args.n_encounters,
         "query_split": args.query_split,
         "candidate_split": args.candidate_split,

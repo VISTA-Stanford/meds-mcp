@@ -87,6 +87,12 @@ def main() -> None:
     )
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument(
+        "--retrieval-mode",
+        choices=("balanced", "topk"),
+        default="balanced",
+        help="Match run_experiment.py default: balanced (Yes/No-balanced) vs topk.",
+    )
+    parser.add_argument(
         "--n-encounters",
         type=int,
         default=0,
@@ -166,6 +172,7 @@ def main() -> None:
             task=item.task,
             top_k=args.top_k,
             exclude_pid=pid,
+            class_balanced=(args.retrieval_mode == "balanced"),
         )
 
     base_generator = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))

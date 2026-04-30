@@ -42,6 +42,27 @@ THORACIC_NOTE_TITLES: Set[str] = {
 }
 
 
+# Per-event cap for inline text content (imaging impressions, note bodies, lab
+# values). Typical imaging impressions are 200–1500 chars; pathology can spike
+# to 5–10k. 2000 keeps structural information without letting one event crowd
+# out the rest. The whole-timeline token-budget truncation in the caller
+# (precompute_vignettes.py / run_experiment.py) backstops total size.
+_EVENT_TEXT_MAX_CHARS = 2000
+
+
+def _head_tail_trunc(text: str, max_chars: int) -> str:
+    """Head+tail truncate ``text`` to fit in ``max_chars``.
+
+    Returns the original string if already under the cap. Otherwise keeps the
+    first half and last half with a marker between, mirroring the pattern used
+    elsewhere in the codebase for over-budget timelines.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    half = max(1, (max_chars - 20) // 2)
+    return text[:half] + " [truncated] " + text[-half:]
+
+
 def _parse_entry_ts(raw: Optional[str]) -> Optional[datetime]:
     """Parse a timestamp string into a datetime, with two fallbacks.
 
@@ -314,7 +335,19 @@ class DeterministicTimelineLinearizationGenerator(BaseVignetteGenerator):
                     name = event.attrib.get("name", "")
 
                     parts = [p for p in [etype, code, name] if p]
-                    if parts:
-                        lines.append(f"[{ts_raw}] " + " | ".join(parts))
+                    if not parts:
+                        continue
+
+                    # Append the event's body text (imaging impression, note
+                    # body, lab value, etc.) so the summarizer sees actual
+                    # findings rather than just procedure names. Per-event cap
+                    # prevents one mega-note from dominating the timeline.
+                    text = "".join(event.itertext()).strip()
+                    if text:
+                        text = " ".join(text.split())  # collapse whitespace
+                        text = _head_tail_trunc(text, _EVENT_TEXT_MAX_CHARS)
+                        parts.append(text)
+
+                    lines.append(f"[{ts_raw}] " + " | ".join(parts))
 
         return "\n".join(lines)
