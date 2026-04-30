@@ -1,44 +1,37 @@
-# Clinical Vignette Generation Prompt Template (USMLE-style narrative)
-# Copy this file to vignette_prompt.txt and customize as needed.
-# The .txt file is gitignored; this .example.txt is tracked.
+You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the patient timeline (provided in the user message) into a USMLE-style clinical vignette: a single coherent narrative paragraph in clinical prose.
 
-You are generating a clinical vignette for patient similarity retrieval in thoracic oncology. Rewrite the following patient timeline into a USMLE-style clinical vignette — a single coherent narrative paragraph written in clinical prose.
+DEMOGRAPHICS
+The user message begins with a "PATIENT DEMOGRAPHICS AT PREDICTION TIME:" prelude with deterministically-extracted values (age, sex, race, ethnicity). Use those values verbatim.
+- Open with "A <N>-year-old <man/woman>..." using the exact age integer. Prefer "man" / "woman" over "male" / "female" in prose.
+- Race/ethnicity may be incorporated when concrete, e.g. "A 68-year-old Asian man..." or "A 72-year-old non-Hispanic white woman...". Skip when missing or "Unknown".
+- Relevant past medical and social history (smoking history, prior malignancies, major comorbidities) belongs in the opening sentence after demographics.
+- If the Age line is missing, omit the age fragment entirely ("A patient with..."). NEVER use vague age terms ("middle-aged", "elderly", "older adult", "in his 60s"). Age is either the exact integer or absent.
 
-The user message begins with a block labeled "PATIENT DEMOGRAPHICS AT PREDICTION TIME:" that contains deterministically-extracted values (age in years, sex, race, ethnicity) derived from structured fields in the source record. You MUST use those values verbatim. Follow the exact rules below.
+TASK: {TASK_QUESTION}
 
-Opening sentence (required): begin with classic USMLE demographics — "A <N>-year-old <sex> with <relevant history>…" — where:
-- `<N>` is the Age value from the prelude, typed out as an integer followed by "-year-old".
-- `<sex>` is written as man/woman (if the prelude says "Sex: male" / "Sex: female") or the literal value otherwise. Prefer "man" / "woman" over "male" / "female" in prose.
-- Race and ethnicity from the prelude may be incorporated into the opening or later sentences if they appear, e.g. "A 68-year-old Asian man…" or "A 72-year-old non-Hispanic white woman…". Include race only when it is a concrete value (not "Unknown" or missing).
-- Relevant past medical / social history from the timeline body (smoking / tobacco history, prior malignancies, major comorbidities) goes after the demographics — e.g. "A 68-year-old man with a 40-pack-year smoking history and hypertension…".
-- If the Age line is missing from the prelude, **omit the age fragment entirely**. Write "A patient with…" or pivot to a history-first phrasing. Do NOT invent, interpolate, or use vague age descriptors.
+FOCUS: {TASK_FOCUS}
 
-VAGUE DEMOGRAPHIC TERMS ARE FORBIDDEN. Never write any of: "middle-aged", "elderly", "older adult", "young adult", "adult", "senior", "geriatric", "a man in his 60s", or any approximation. Age is either the exact integer from the prelude, or absent from the vignette.
+Within the rules below, prioritize timeline events, findings, and contextual factors most informative for the TASK above. Do not invent or speculate — use only what the timeline states.
 
-Subsequent sentences: weave diagnosis (with histology, laterality, and stage if stated), molecular markers, treatment course (drug/regimen names, surgery types, radiation), disease-status updates, imaging/pathology milestones, and comorbidities into the narrative.
+CONTENT
+- Findings-first: when a test, imaging study, or pathology event is mentioned, include its clinical finding/impression — not just the procedure name. Prefer "what was found" over "what was done". If a result is explicitly absent, mention that briefly once.
+- Compress repeated surveillance into trajectory language ("serial imaging remained stable") rather than enumerating every scan.
+- Highlight clinically meaningful negatives when explicitly documented (e.g. "no metastatic disease", "no hypermetabolic lesions").
+- Weave diagnosis (with histology, laterality, stage if stated), molecular markers, treatment course (drug/regimen names, surgery types, radiation), disease-status updates, and comorbidities into the narrative.
+- Include specific values only when explicitly reported AND clinically material (TNM stage, ECOG, PD-L1 TPS, EF %, GFR/CKD stage, GOLD stage, HbA1c, abnormal labs that changed management). Omit routine lab tables and administrative events.
+- Use standard oncology abbreviations (NSCLC, SCLC, adeno, squam, mets, CR/PR/SD/PD, RUL/RML/RLL/LUL/LLL).
+- If a domain is absent from the timeline, simply omit it — do not write placeholders like "none documented".
 
-FINDINGS-FIRST REQUIREMENT (critical):
-- Do NOT produce a list of actions/procedures alone (e.g., "CT chest performed", "MRI brain performed", "CBC obtained").
-- When a test, imaging study, or pathology event is mentioned, prioritize its clinically meaningful finding/impression whenever present in the source text.
-- Prefer "what was found" over "what was done". If the result is explicitly absent, mention that concisely once (e.g., "findings not documented") rather than repeating procedure-only statements.
-- Highlight negative-but-informative findings relevant to malignancy/progression (e.g., no metastatic disease, no hypermetabolic lesions, no acute intracranial process) when explicitly documented.
-- Compress repetitive surveillance actions into trajectory language ("serial imaging remained stable") instead of enumerating every scan.
+DATES
+- Strictly NO dates, years, months, or numeric time references (no "03/2021", no "2023", no "in July", no "6 months later").
+- Use relative or narrative chronology: "initially", "subsequently", "at the time of staging", "following treatment", "at most recent follow-up", "after completing chemoradiation".
+
+FORMAT
+- One paragraph of clinical prose, third person, past tense for history and present tense for current state.
+- Target length: 4-8 sentences.
+- Output only the vignette. No preamble, headers, bullets, or trailing commentary.
+- At least 2 sentences must contain concrete clinical findings/results (not just tests/procedures).
+- At most 1 sentence may be primarily procedural without an associated finding.
 
 Style example (format only; content must come entirely from the user's timeline):
 "A 68-year-old man with a 40-pack-year smoking history and hypertension was diagnosed with stage IIIB lung adenocarcinoma after a right upper lobe mass was identified on surveillance CT. Molecular profiling revealed an EGFR exon 19 deletion. He received concurrent chemoradiation with cisplatin and etoposide, followed by consolidation durvalumab. Restaging imaging subsequently demonstrated stable disease. Current medications include lisinopril and osimertinib; ECOG performance status is 1."
-
-Rules:
-- Strictly **NO dates, years, months, or numeric time references** (no "03/2021", no "2023", no "in July", no "6 months later"). Use relative / narrative chronology instead: "initially", "subsequently", "at the time of staging", "following treatment", "at most recent follow-up", "after completing chemoradiation".
-- One paragraph of clinical prose, third person, past tense for historical events and present tense for the current state.
-- Include specific values only when explicitly reported AND clinically material (PD-L1 TPS, Ki67, TNM stage, ECOG, abnormal labs that changed management). Omit routine lab tables and administrative events.
-- Use standard oncology abbreviations (NSCLC, SCLC, adeno, squam, mets, CR/PR/SD/PD, RUL/RML/RLL/LUL/LLL).
-- Preserve only explicitly stated information. Never infer, speculate, diagnose, or assign causality beyond what the timeline states.
-- If a domain (e.g., molecular markers, comorbidities) is absent from the timeline, simply omit it — do not write placeholders like "none documented".
-- Target length: 4–8 sentences.
-- Output only the vignette itself. No preamble, headers, bullet points, or trailing commentary.
-
-Hard quality constraints (must satisfy all):
-- At least 2 sentences must contain concrete clinical findings/results (not just tests/procedures).
-- At most 1 sentence may be primarily procedural without an associated finding.
-- If serial tests are repeated with similar impressions, summarize the trajectory in one sentence (e.g., stable/no interval change).
-- Avoid generic wording like "ongoing evaluation" unless you include what is being evaluated and the latest documented state.

@@ -22,7 +22,7 @@ for _p in (_REPO_ROOT / "src", _REPO_ROOT):
         sys.path.insert(0, str(_p))
 
 from meds_mcp.similarity import CohortStore, DeterministicTimelineLinearizationGenerator, demographics_block
-from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer, load_vignette_prompt
+from meds_mcp.similarity.llm_secure_adapter import load_vignette_prompt
 from meds_mcp.experiments.task_config import TASK_DESCRIPTIONS
 from experiments.fewshot_with_labels import _paths
 
@@ -45,26 +45,10 @@ def main() -> None:
     parser.add_argument("--n-encounters", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
-        "--vignette-prompt",
-        type=Path,
-        default=None,
-        help="Path to a custom vignette system prompt file. Overrides the default vignette_prompt.txt.",
-    )
-    parser.add_argument(
         "--person-ids-file",
         type=Path,
         default=None,
         help="JSON file containing a list of person_id strings. When set, only generate vignettes for those patients.",
-    )
-    parser.add_argument(
-        "--per-task",
-        action="store_true",
-        help=(
-            "Generate one vignette per (person_id, embed_time, task) triple. "
-            "Each batch request appends a TASK FOCUS suffix to the system "
-            "prompt, and results are written into PatientState.task_vignettes "
-            "instead of the legacy `vignette` field."
-        ),
     )
     parser.add_argument(
         "--tasks",
@@ -72,8 +56,8 @@ def main() -> None:
         nargs="+",
         default=None,
         help=(
-            "When --per-task is set, restrict generation to these task names "
-            "(must appear in TASK_DESCRIPTIONS). Default: all tasks."
+            "Restrict generation to these task names (must appear in "
+            "TASK_DESCRIPTIONS). Default: all tasks."
         ),
     )
     parser.add_argument("--model", type=str, default="gemini-2.5-flash")
@@ -97,11 +81,7 @@ def main() -> None:
 
     store = CohortStore.load(args.patients, args.items)
     linearizer = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
-    if args.vignette_prompt is not None:
-        system_prompt = args.vignette_prompt.read_text(encoding="utf-8").strip()
-        logger.info("Using custom vignette prompt from %s", args.vignette_prompt)
-    else:
-        system_prompt = load_vignette_prompt() or SecureLLMSummarizer._default_prompt()
+    template = load_vignette_prompt()
 
     pid_filter: set[str] | None = None
     if args.person_ids_file is not None:
@@ -109,138 +89,94 @@ def main() -> None:
         pid_filter = {str(x) for x in _json.loads(args.person_ids_file.read_text())}
         logger.info("Restricting vignette generation to %d person_ids from %s", len(pid_filter), args.person_ids_file)
 
-    if args.per_task:
-        if args.tasks:
-            unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
-            if unknown:
-                raise SystemExit(
-                    f"Unknown task name(s) for --tasks: {unknown}. "
-                    f"Known: {sorted(TASK_DESCRIPTIONS)}"
-                )
-            allowed_tasks = set(args.tasks)
-        else:
-            allowed_tasks = set(TASK_DESCRIPTIONS)
+    if args.tasks:
+        unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
+        if unknown:
+            raise SystemExit(
+                f"Unknown task name(s) for --tasks: {unknown}. "
+                f"Known: {sorted(TASK_DESCRIPTIONS)}"
+            )
+        allowed_tasks = set(args.tasks)
+    else:
+        allowed_tasks = set(TASK_DESCRIPTIONS)
 
-        # (state, task) units of work. One request per unit.
-        todo_pairs: list[tuple] = []
-        for it in store.items():
-            if it.task not in allowed_tasks:
-                continue
-            if not it.embed_time:
-                continue
-            if pid_filter is not None and it.person_id not in pid_filter:
-                continue
-            state = store.get_or_none(it.person_id, it.embed_time)
-            if state is None:
-                continue
-            existing = state.task_vignettes.get(it.task) or ""
-            if not args.force and existing.strip():
-                continue
-            todo_pairs.append((state, it.task))
+    # (state, task, question) units of work. One request per unit.
+    todo_triples: list[tuple] = []
+    for it in store.items():
+        if it.task not in allowed_tasks:
+            continue
+        if not it.embed_time:
+            continue
+        if pid_filter is not None and it.person_id not in pid_filter:
+            continue
+        state = store.get_or_none(it.person_id, it.embed_time)
+        if state is None:
+            continue
+        existing = state.task_vignettes.get(it.task) or ""
+        if not args.force and existing.strip():
+            continue
+        todo_triples.append((state, it.task, it.question))
 
-        if args.limit is not None:
-            todo_pairs = todo_pairs[: args.limit]
-        logger.info("(state, task) pairs to summarize via batch: %d", len(todo_pairs))
-        if not todo_pairs:
-            return
+    if args.limit is not None:
+        todo_triples = todo_triples[: args.limit]
+    logger.info("(state, task) pairs to summarize via batch: %d", len(todo_triples))
+    if not todo_triples:
+        return
 
-        # Cache linearized timelines per state so we don't pay the XML parse
-        # cost N_tasks times for the same patient.
-        timeline_cache: dict[tuple[str, str], str] = {}
-        requests: list[dict] = []
-        for state, task in todo_pairs:
-            cache_key = (state.person_id, state.embed_time)
-            if cache_key not in timeline_cache:
-                try:
-                    tl = linearizer.generate(
-                        patient_id=state.person_id,
-                        cutoff_date=state.embed_time,
-                        n_encounters=args.n_encounters,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Skipping %s@%s (timeline failure): %s",
-                        state.person_id, state.embed_time, exc,
-                    )
-                    timeline_cache[cache_key] = ""
-                    continue
-                demos = demographics_block(
-                    xml_dir=str(args.corpus_dir),
+    # Cache linearized timelines per state so we don't pay the XML parse
+    # cost N_tasks times for the same patient.
+    timeline_cache: dict[tuple[str, str], str] = {}
+    requests: list[dict] = []
+    for state, task, question in todo_triples:
+        cache_key = (state.person_id, state.embed_time)
+        if cache_key not in timeline_cache:
+            try:
+                tl = linearizer.generate(
                     patient_id=state.person_id,
                     cutoff_date=state.embed_time,
-                )
-                timeline_cache[cache_key] = (demos + "\n" + tl) if demos else tl
-            user_text = timeline_cache[cache_key]
-            if not user_text.strip():
-                continue
-
-            task_system_prompt = system_prompt + SecureLLMSummarizer.task_focus_suffix(
-                TASK_DESCRIPTIONS[task]
-            )
-            requests.append(
-                {
-                    "request": {
-                        "system_instruction": {"parts": [{"text": task_system_prompt}]},
-                        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "maxOutputTokens": 1024,
-                            "thinkingConfig": {"thinkingBudget": 0},
-                        },
-                    },
-                    "_meta": json.dumps(
-                        {
-                            "person_id": state.person_id,
-                            "embed_time": state.embed_time,
-                            "task": task,
-                        }
-                    ),
-                }
-            )
-    else:
-        todo = [
-            p for p in store.patient_states()
-            if (args.force or not p.vignette.strip())
-            and p.embed_time
-            and (pid_filter is None or p.person_id in pid_filter)
-        ]
-        if args.limit is not None:
-            todo = todo[: args.limit]
-        logger.info("States to summarize via batch: %d", len(todo))
-        if not todo:
-            return
-
-        requests = []
-        for p in todo:
-            try:
-                timeline = linearizer.generate(
-                    patient_id=p.person_id,
-                    cutoff_date=p.embed_time,
                     n_encounters=args.n_encounters,
                 )
             except Exception as exc:
-                logger.warning("Skipping %s@%s (timeline failure): %s", p.person_id, p.embed_time, exc)
+                logger.warning(
+                    "Skipping %s@%s (timeline failure): %s",
+                    state.person_id, state.embed_time, exc,
+                )
+                timeline_cache[cache_key] = ""
                 continue
             demos = demographics_block(
                 xml_dir=str(args.corpus_dir),
-                patient_id=p.person_id,
-                cutoff_date=p.embed_time,
+                patient_id=state.person_id,
+                cutoff_date=state.embed_time,
             )
-            user_text = (demos + "\n" + timeline) if demos else timeline
-            requests.append(
-                {
-                    "request": {
-                        "system_instruction": {"parts": [{"text": system_prompt}]},
-                        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "maxOutputTokens": 1024,
-                            "thinkingConfig": {"thinkingBudget": 0},
-                        },
+            timeline_cache[cache_key] = (demos + "\n" + tl) if demos else tl
+        user_text = timeline_cache[cache_key]
+        if not user_text.strip():
+            continue
+
+        task_system_prompt = template.format(
+            TASK_QUESTION=question.strip(),
+            TASK_FOCUS=TASK_DESCRIPTIONS[task].strip(),
+        )
+        requests.append(
+            {
+                "request": {
+                    "system_instruction": {"parts": [{"text": task_system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 1024,
+                        "thinkingConfig": {"thinkingBudget": 0},
                     },
-                    "_meta": json.dumps({"person_id": p.person_id, "embed_time": p.embed_time}),
-                }
-            )
+                },
+                "_meta": json.dumps(
+                    {
+                        "person_id": state.person_id,
+                        "embed_time": state.embed_time,
+                        "task": task,
+                    }
+                ),
+            }
+        )
 
     in_bucket, in_path = _parse_gcs_uri(args.vertex_input_uri)
     storage_client = storage.Client()
@@ -291,14 +227,12 @@ def main() -> None:
             if state is None:
                 continue
             task = meta.get("task")
-            if task:
-                # Per-task result: merge into task_vignettes without touching
-                # the legacy task-agnostic vignette field.
-                new_task_vignettes = dict(state.task_vignettes)
-                new_task_vignettes[str(task)] = vignette
-                store.update_patient(replace(state, task_vignettes=new_task_vignettes))
-            else:
-                store.update_patient(replace(state, vignette=vignette))
+            if not task:
+                logger.warning("Batch result missing task in _meta for %s@%s; skipping", pid, et)
+                continue
+            new_task_vignettes = dict(state.task_vignettes)
+            new_task_vignettes[str(task)] = vignette
+            store.update_patient(replace(state, task_vignettes=new_task_vignettes))
             updates += 1
 
     store.save(args.patients, args.items)

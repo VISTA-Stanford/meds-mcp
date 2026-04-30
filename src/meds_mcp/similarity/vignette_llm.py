@@ -2,19 +2,24 @@
 
 from typing import Optional
 
+from .llm_secure_adapter import SecureLLMSummarizer
 from .vignette_base import BaseVignetteGenerator
 
 
 class LLMVignetteGenerator(BaseVignetteGenerator):
-    """Wraps a base vignette generator with LLM summarization.
+    """Wraps a base vignette generator with task-aware LLM summarization."""
 
-    The LLM must expose a ``summarize(text: str) -> str`` method
-    (e.g. SecureLLMSummarizer).
-    """
-
-    def __init__(self, base_generator: BaseVignetteGenerator, llm):
+    def __init__(
+        self,
+        base_generator: BaseVignetteGenerator,
+        llm: SecureLLMSummarizer,
+        task_question: str,
+        task_focus: str,
+    ):
         self.base = base_generator
         self.llm = llm
+        self.task_question = task_question
+        self.task_focus = task_focus
 
     def generate(
         self,
@@ -29,4 +34,8 @@ class LLMVignetteGenerator(BaseVignetteGenerator):
         )
         if not base_text.strip():
             return base_text
-        return self.llm.summarize(base_text)
+        return self.llm.summarize(
+            base_text,
+            task_question=self.task_question,
+            task_focus=self.task_focus,
+        )

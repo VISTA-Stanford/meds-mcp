@@ -184,7 +184,20 @@ def main() -> None:
                     pbar.set_postfix_str(f"ok={n_ok} skip={n_skip}")
                 continue
             try:
-                vignette = summarizer.summarize(text)
+                # progression_subset is a non-task experiment; pass a generic
+                # question/focus pair so the shared task-aware vignette
+                # template renders cleanly.
+                vignette = summarizer.summarize(
+                    text,
+                    task_question=(
+                        "Summarize this thoracic oncology patient's clinical "
+                        "trajectory for similarity retrieval."
+                    ),
+                    task_focus=(
+                        "Highlight diagnosis, stage, treatment received, "
+                        "response, and disease trajectory."
+                    ),
+                )
             except Exception as e:
                 logger.error("Vignette LLM failed %s: %s", pid, e)
                 n_skip += 1

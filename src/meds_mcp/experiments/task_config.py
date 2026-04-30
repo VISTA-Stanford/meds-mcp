@@ -61,132 +61,45 @@ TASK_TO_FILENAME: Dict[str, str] = {
     "chexpert": "labels_chexpert.csv",
 }
 
-# Task -> human-readable description for tool/system prompt (used in cohort_chat when task_name is set)
+# Task -> short focus statement for vignette generation (1-2 sentences).
+# Substituted into the {TASK_FOCUS} placeholder of configs/prompts/vignette_prompt.example.txt
+# so the LLM steers the vignette toward information most relevant to the downstream task.
 TASK_DESCRIPTIONS: Dict[str, str] = {
-    "guo_los": (
-        "This is a probabilistic model trained to predict whether a patient will have a long "
-        "hospital length of stay (≥7 days) at admission time. The assistant may choose to use this "
-        "tool if estimating risk of extended admission would improve reasoning, but it is not required."
-    ),
-    "guo_readmission": (
-        "This is a probabilistic model trained to predict 30-day hospital readmission at discharge. "
-        "The assistant may use this tool if post-discharge risk estimation is useful, but it does not "
-        "need to invoke it unless beneficial."
-    ),
-    "guo_icu": (
-        "This is a probabilistic model trained to predict ICU transfer during an admission. "
-        "The assistant may call this tool if ICU risk estimation would improve its answer, but it is optional."
-    ),
-    "lab_thrombocytopenia": (
-        "This is a probabilistic model trained to predict the severity category of thrombocytopenia prior "
-        "to the next platelet lab result. The model outputs class probabilities (normal, mild, moderate, severe). "
-        "The assistant may use this tool if anticipating lab severity improves reasoning, but it is not mandatory."
-    ),
-    "lab_hyperkalemia": (
-        "This is a probabilistic model trained to predict hyperkalemia severity before the next potassium "
-        "lab result. Use is optional and only recommended if lab forecasting supports the reasoning process."
-    ),
-    "lab_hyponatremia": (
-        "This is a probabilistic model trained to predict hyponatremia severity before the next sodium lab "
-        "value. The assistant may call this tool if anticipating electrolyte abnormalities is useful, but it is not required."
-    ),
-    "lab_anemia": (
-        "This is a probabilistic model trained to predict anemia severity prior to the next hemoglobin result. "
-        "The tool outputs probabilities over severity categories. The assistant may use this tool if "
-        "anticipating hematologic abnormalities improves its reasoning."
-    ),
-    "new_hypertension": (
-        "This is a probabilistic model trained to predict first diagnosis of hypertension within one year "
-        "post-discharge. The assistant may invoke this tool if estimating incident hypertension risk is useful."
-    ),
-    "new_hyperlipidemia": (
-        "This is a probabilistic model trained to predict first diagnosis of hyperlipidemia within one year "
-        "after discharge. The assistant may choose to use this tool when long-term cardiometabolic risk estimation is relevant."
-    ),
-    "new_pancan": (
-        "This is a probabilistic model trained to predict first diagnosis of pancreatic cancer within one year "
-        "post-discharge. The assistant may call this tool if rare malignancy risk estimation is helpful."
-    ),
-    "new_celiac": (
-        "This is a probabilistic model trained to predict first diagnosis of celiac disease within one year "
-        "of discharge. The assistant may invoke this tool if autoimmune risk prediction is useful, but it is optional."
-    ),
-    "new_lupus": (
-        "This is a probabilistic model trained to predict first diagnosis of lupus within one year post-discharge. "
-        "The assistant may use this tool when systemic autoimmune risk estimation would improve its reasoning."
-    ),
-    "new_acutemi": (
-        "This is a probabilistic model trained to predict first diagnosis of acute myocardial infarction within "
-        "one year of discharge. The assistant may invoke this tool when estimating cardiovascular event risk is helpful."
-    ),
-    "lab_hypoglycemia": (
-        "This is a probabilistic model trained to predict hypoglycemia severity before the next glucose "
-        "measurement. The assistant may use this tool if anticipating glucose abnormalities improves reasoning, but it is optional."
-    ),
-    "chexpert": (
-        "This is a model trained to predict CheXpert (chest X-ray) findings. "
-        "The assistant may use this tool when imaging finding prediction would improve its answer."
-    ),
+    # EHRSHOT admin / lab / incident-disease tasks
+    "guo_los": "Highlight admission acuity, comorbidity burden, prior length-of-stay patterns, and any factors likely to delay discharge.",
+    "guo_readmission": "Highlight discharge stability, recent hospitalizations, unresolved issues at discharge, and post-discharge support.",
+    "guo_icu": "Highlight early hospital course severity, vital trends, escalating oxygen or pressor support, and signs of clinical deterioration.",
+    "new_hypertension": "Highlight blood-pressure trajectory, cardiovascular risk factors, family history, and lifestyle factors.",
+    "new_hyperlipidemia": "Highlight lipid-panel trends, cardiovascular risk factors, diet and lifestyle, and family history.",
+    "new_pancan": "Highlight pancreatic-cancer risk factors (smoking, family history, new-onset diabetes), abdominal symptoms, and abnormal pancreatic imaging or labs.",
+    "new_celiac": "Highlight GI symptoms, autoimmune comorbidities, family history, anemia, and any tTG-IgA results.",
+    "new_lupus": "Highlight autoimmune symptoms (joint pain, rash, serositis), ANA / dsDNA results, cytopenias, and family history.",
+    "new_acutemi": "Highlight cardiovascular risk factors, prior MI / CAD, recent chest pain, troponin / EKG abnormalities, and lipid and diabetes control.",
+    "lab_thrombocytopenia": "Highlight platelet trajectory, recent transfusions, marrow-suppressing drugs, infections, and any bleeding.",
+    "lab_hyperkalemia": "Highlight potassium trajectory, renal function, ACEi / ARB / spironolactone use, and acid-base status.",
+    "lab_hypoglycemia": "Highlight glucose trajectory, insulin or sulfonylurea use, recent oral intake, and hepatic / renal function.",
+    "lab_hyponatremia": "Highlight sodium trajectory, volume status, diuretic use, SIADH context, and renal function.",
+    "lab_anemia": "Highlight hemoglobin trajectory, recent bleeding, transfusions, marrow-suppressing therapy, and iron / B12 status.",
+    "chexpert": "Highlight pulmonary symptoms, recent infections, oxygen requirement, prior chest-imaging findings, and cardiac comorbidities.",
 }
 
 
 # ---------------------------------------------------------------------------
 # Thoracic-oncology outcome tasks present in
-# experiments/fewshot_with_labels/outputs/items.jsonl. Eight task families,
-# each emitted at 1-, 2-, 3-, 4-, and 5-year horizons. Descriptions are
-# extended into TASK_DESCRIPTIONS programmatically so the 40 entries stay
-# consistent — change a template here and every horizon updates together.
+# experiments/fewshot_with_labels/outputs/items.jsonl. Eight families × five
+# horizons (1, 2, 3, 4, 5 years) = 40 entries, generated from a template per
+# family so the wording stays consistent.
 # ---------------------------------------------------------------------------
 
 _THORACIC_HORIZON_TASK_TEMPLATES: Dict[str, str] = {
-    "died_any_cause": (
-        "This is a probabilistic model trained to predict whether the patient "
-        "will die from any cause within {n} year{s} of the prediction time "
-        "(all-cause mortality). The assistant may use this tool when overall "
-        "survival risk over a {n}-year horizon would inform reasoning."
-    ),
-    "died_of_cancer": (
-        "This is a probabilistic model trained to predict cancer-specific "
-        "mortality — whether the patient will die of their malignancy within "
-        "{n} year{s} of the prediction time. Use when disease-specific "
-        "survival risk supports the reasoning, distinct from death from "
-        "competing causes."
-    ),
-    "died_other_cause": (
-        "This is a probabilistic model trained to predict death from a "
-        "non-cancer cause within {n} year{s} of the prediction time "
-        "(competing-risk mortality). Use when distinguishing cancer-attributable "
-        "death from death from other causes is clinically relevant."
-    ),
-    "has_progression_nonrecurrence": (
-        "This is a probabilistic model trained to predict disease progression "
-        "(in the absence of a documented recurrence event) within {n} year{s} "
-        "of the prediction time. Use when progression-only risk — independent "
-        "of relapse — is the relevant outcome."
-    ),
-    "has_recurrence": (
-        "This is a probabilistic model trained to predict cancer recurrence "
-        "within {n} year{s} of the prediction time. Use when relapse risk "
-        "would inform downstream reasoning about surveillance, adjuvant "
-        "therapy, or prognosis."
-    ),
-    "has_stable_disease": (
-        "This is a probabilistic model trained to predict whether the patient "
-        "will have stable disease at the {n}-year horizon — alive with neither "
-        "progression nor recurrence documented during the {n}-year window."
-    ),
-    "is_cured_by_horizon": (
-        "This is a probabilistic model trained to predict whether the patient "
-        "is cured by the {n}-year horizon — alive with no documented "
-        "recurrence and no documented progression within {n} year{s} of the "
-        "prediction time. Use when cure probability is clinically actionable."
-    ),
-    "progression_recurrence_free_survival": (
-        "This is a probabilistic model trained to predict progression- and "
-        "recurrence-free survival at the {n}-year horizon — whether the "
-        "patient remains alive without documented progression or recurrence "
-        "within {n} year{s} of the prediction time."
-    ),
+    "died_any_cause": "Highlight stage at diagnosis, treatment response, performance status, comorbidity burden, and any progression or deterioration relevant to {n}-year overall survival.",
+    "died_of_cancer": "Highlight cancer stage, histology, treatment response, sites of disease, and progression markers relevant to {n}-year cancer-specific mortality.",
+    "died_other_cause": "Highlight non-cancer comorbidities (cardiopulmonary, vascular, frailty), competing causes, and overall medical status — separate from the cancer trajectory — relevant to {n}-year non-cancer mortality.",
+    "has_progression_nonrecurrence": "Highlight current disease status, treatment received, response, and any imaging or biomarker signals of progression within {n} year{s}.",
+    "has_recurrence": "Highlight curative treatment received, response status, surveillance findings, and risk factors for relapse within {n} year{s}.",
+    "has_stable_disease": "Highlight current treatment, recent response, surveillance findings, and stability markers over the {n}-year window.",
+    "is_cured_by_horizon": "Highlight curative treatment, response, recurrence-free interval, and absence of progression markers relevant to cure at the {n}-year horizon.",
+    "progression_recurrence_free_survival": "Highlight stage, curative treatment, surveillance findings, and progression / recurrence markers relevant to {n}-year disease-free survival.",
 }
 
 for _family, _template in _THORACIC_HORIZON_TASK_TEMPLATES.items():

@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Precompute per-(patient, embed_time) vignettes for the fewshot_with_labels
-experiment.
+Precompute per-(patient, embed_time, task) vignettes for the
+fewshot_with_labels experiment.
 
-Reads outputs/patients.jsonl (produced by build_cohort.py) where each row is
-one PatientState keyed by ``(person_id, embed_time)``. For every state with
-an empty ``vignette`` field, this script:
+Reads outputs/patients.jsonl (produced by build_cohort.py) and outputs/items.jsonl.
+For every (state, task) pair where ``state.task_vignettes[task]`` is empty,
+this script:
 
-  1) Linearizes that patient's XML timeline up to the state's embed_time,
-     keeping the last N encounters (deterministic).
-  2) LLM-summarizes the linearized text into a short vignette.
+  1) Linearizes that patient's XML timeline up to the state's embed_time
+     (deterministic; cached per state to avoid redundant XML parses).
+  2) LLM-summarizes the linearized text into a short, task-aware vignette.
+     The system prompt is rendered from
+     ``configs/prompts/vignette_prompt.example.txt`` with ``{TASK_QUESTION}``
+     filled from ``item.question`` and ``{TASK_FOCUS}`` filled from
+     ``TASK_DESCRIPTIONS[task]``.
 
-Dedup is automatic: only one LLM call per distinct ``(person_id, embed_time)``
-even when many task items share that embed_time.
-
-Writes the updated patients.jsonl atomically after every success (resumable).
-Use --force to regenerate.
+Vignettes are stored in ``PatientState.task_vignettes[task]``. Writes the
+updated patients.jsonl atomically after every success (resumable). Use
+``--force`` to regenerate.
 """
 
 from __future__ import annotations
@@ -155,27 +157,13 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Regenerate even if vignette exists")
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument(
-        "--per-task",
-        action="store_true",
-        help=(
-            "Generate one vignette per (person_id, embed_time, task) triple "
-            "instead of one task-agnostic vignette per (person_id, embed_time). "
-            "Each call appends the task's TASK_DESCRIPTIONS entry to the system "
-            "prompt so the LLM produces a task-conditioned summary. Results are "
-            "stored in PatientState.task_vignettes; the legacy `vignette` field "
-            "is left untouched. Per-task mode multiplies LLM cost by the number "
-            "of tasks per state."
-        ),
-    )
-    parser.add_argument(
         "--tasks",
         type=str,
         nargs="+",
         default=None,
         help=(
-            "When --per-task is set, restrict generation to these task names "
-            "(must appear in TASK_DESCRIPTIONS). Default: every task present "
-            "in the items file."
+            "Restrict generation to these task names (must appear in "
+            "TASK_DESCRIPTIONS). Default: every task present in the items file."
         ),
     )
     args = parser.parse_args()
@@ -232,42 +220,34 @@ def main() -> None:
     base_generator = pipeline.base_generator
     assert summarizer is not None
 
-    # Per-task: figure out which tasks are in scope, and build the
-    # (state_key -> [tasks needing a vignette]) plan up front. We share one
+    # Build the (state_key -> [(task, question)]) plan up front. We share one
     # linearized timeline per state across its tasks.
-    per_task_plan: Dict[Tuple[str, str], List[str]] = {}
-    if args.per_task:
-        if args.tasks:
-            unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
-            if unknown:
-                raise SystemExit(
-                    f"Unknown task name(s) for --tasks: {unknown}. "
-                    f"Known: {sorted(TASK_DESCRIPTIONS)}"
-                )
-            allowed_tasks = set(args.tasks)
-        else:
-            allowed_tasks = set(TASK_DESCRIPTIONS)
-
-        for it in store.items():
-            if it.task not in allowed_tasks:
-                continue
-            if not it.embed_time:
-                continue
-            state = store.get_or_none(it.person_id, it.embed_time)
-            if state is None:
-                continue
-            existing = state.task_vignettes.get(it.task) or ""
-            if not args.force and existing.strip():
-                continue
-            per_task_plan.setdefault(state.key, []).append(it.task)
-
-        todo = [store.get(pid, et) for (pid, et) in per_task_plan.keys()]
+    per_task_plan: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    if args.tasks:
+        unknown = [t for t in args.tasks if t not in TASK_DESCRIPTIONS]
+        if unknown:
+            raise SystemExit(
+                f"Unknown task name(s) for --tasks: {unknown}. "
+                f"Known: {sorted(TASK_DESCRIPTIONS)}"
+            )
+        allowed_tasks = set(args.tasks)
     else:
-        todo = [
-            p
-            for p in store.patient_states()
-            if (args.force or not p.vignette.strip()) and p.embed_time
-        ]
+        allowed_tasks = set(TASK_DESCRIPTIONS)
+
+    for it in store.items():
+        if it.task not in allowed_tasks:
+            continue
+        if not it.embed_time:
+            continue
+        state = store.get_or_none(it.person_id, it.embed_time)
+        if state is None:
+            continue
+        existing = state.task_vignettes.get(it.task) or ""
+        if not args.force and existing.strip():
+            continue
+        per_task_plan.setdefault(state.key, []).append((it.task, it.question))
+
+    todo = [store.get(pid, et) for (pid, et) in per_task_plan.keys()]
 
     # Only process states whose XML exists.
     missing_xml = [p for p in todo if not (args.corpus_dir / f"{p.person_id}.xml").exists()]
@@ -341,7 +321,9 @@ def main() -> None:
 
     def _summarize_with_retry(
         text: str, pid: str, et: str,
-        task_description: str | None = None,
+        *,
+        task_question: str,
+        task_focus: str,
     ) -> tuple[str | None, int, bool]:
         """Return (vignette_or_None, attempts_used, shrunk).
 
@@ -356,9 +338,6 @@ def main() -> None:
 
         ``shrunk=True`` if any attempt after the first used a smaller input
         than the original.
-
-        ``task_description`` (when set) is forwarded to the summarizer so the
-        generated vignette is conditioned on a downstream task.
         """
         last_exc: Exception | None = None
         current = text
@@ -366,7 +345,11 @@ def main() -> None:
         for attempt in range(args.max_retries + 1):
             try:
                 return (
-                    summarizer.summarize(current, task_description=task_description),
+                    summarizer.summarize(
+                        current,
+                        task_question=task_question,
+                        task_focus=task_focus,
+                    ),
                     attempt,
                     shrunk,
                 )
@@ -441,93 +424,55 @@ def main() -> None:
         if demos:
             text = demos + "\n" + text
 
-        if args.per_task:
-            # One LLM call per task this state participates in. Timeline +
-            # demographics are reused; only the system prompt's TASK FOCUS
-            # suffix changes per call.
-            tasks_for_state = per_task_plan.get(p.key, [])
-            if not tasks_for_state:
-                if pbar:
-                    pbar.update(1)
-                    pbar.set_postfix_str(f"ok={n_ok} skip={n_skip}")
-                continue
+        # One LLM call per (state, task). Timeline + demographics are reused;
+        # the system prompt's TASK / FOCUS placeholders change per call.
+        tasks_for_state = per_task_plan.get(p.key, [])
+        if not tasks_for_state:
+            if pbar:
+                pbar.update(1)
+                pbar.set_postfix_str(f"ok={n_ok} skip={n_skip}")
+            continue
 
-            new_task_vignettes = dict(p.task_vignettes)
-            any_was_shrunk = False
-            for task_name in tasks_for_state:
-                task_desc = TASK_DESCRIPTIONS[task_name]
-                v, attempts_used, was_shrunk = _summarize_with_retry(
-                    text, p.person_id, p.embed_time,
-                    task_description=task_desc,
-                )
-                n_retries_used += attempts_used
-                any_was_shrunk = any_was_shrunk or was_shrunk
-                if v is None:
-                    logger.warning(
-                        "Using deterministic fallback vignette for %s@%s task=%s "
-                        "(LLM failed after %d attempts).",
-                        p.person_id, p.embed_time, task_name, args.max_retries + 1,
-                    )
-                    v = _fallback_vignette(demos, text, p.person_id, p.embed_time)
-                    n_fallback_vignettes += 1
-                    skip_reasons["llm_fail"] += 1
-                else:
-                    if attempts_used > 0:
-                        n_ok_after_retry += 1
-                    if was_shrunk:
-                        n_ok_after_shrink += 1
-                new_task_vignettes[task_name] = v
-
-            store.update_patient(
-                replace(
-                    p,
-                    task_vignettes=new_task_vignettes,
-                    vignette_input_was_truncated=p.vignette_input_was_truncated
-                    or was_trunc
-                    or any_was_shrunk,
-                )
-            )
-            n_ok += 1
-
-            # Persist after every state to keep the script resumable.
-            store.save(args.patients, args.items)
-        else:
-            vignette, attempts_used, was_shrunk = _summarize_with_retry(
-                text, p.person_id, p.embed_time
+        new_task_vignettes = dict(p.task_vignettes)
+        any_was_shrunk = False
+        for task_name, task_question in tasks_for_state:
+            task_focus = TASK_DESCRIPTIONS[task_name]
+            v, attempts_used, was_shrunk = _summarize_with_retry(
+                text, p.person_id, p.embed_time,
+                task_question=task_question,
+                task_focus=task_focus,
             )
             n_retries_used += attempts_used
-
-            # If the LLM refused every attempt, synthesize a deterministic
-            # fallback so EVERY patient ends with a non-empty vignette.
-            # Marked with a visible [FALLBACK:deterministic] prefix so it can
-            # be filtered out of metrics if desired.
-            if vignette is None:
+            any_was_shrunk = any_was_shrunk or was_shrunk
+            if v is None:
                 logger.warning(
-                    "Using deterministic fallback vignette for %s@%s "
+                    "Using deterministic fallback vignette for %s@%s task=%s "
                     "(LLM failed after %d attempts).",
-                    p.person_id, p.embed_time, args.max_retries + 1,
+                    p.person_id, p.embed_time, task_name, args.max_retries + 1,
                 )
-                vignette = _fallback_vignette(demos, text, p.person_id, p.embed_time)
+                v = _fallback_vignette(demos, text, p.person_id, p.embed_time)
                 n_fallback_vignettes += 1
-                # Count it as a non-empty row but also note the failure.
                 skip_reasons["llm_fail"] += 1
             else:
                 if attempts_used > 0:
                     n_ok_after_retry += 1
                 if was_shrunk:
                     n_ok_after_shrink += 1
+            new_task_vignettes[task_name] = v
 
-            store.update_patient(
-                replace(
-                    p,
-                    vignette=vignette,
-                    vignette_input_was_truncated=was_trunc or was_shrunk,
-                )
+        store.update_patient(
+            replace(
+                p,
+                task_vignettes=new_task_vignettes,
+                vignette_input_was_truncated=p.vignette_input_was_truncated
+                or was_trunc
+                or any_was_shrunk,
             )
-            n_ok += 1
+        )
+        n_ok += 1
 
-            # Persist after every success to make the script resumable on crash.
-            store.save(args.patients, args.items)
+        # Persist after every state to keep the script resumable.
+        store.save(args.patients, args.items)
 
         if pbar:
             pbar.update(1)
@@ -538,17 +483,14 @@ def main() -> None:
     if pbar:
         pbar.close()
 
-    if args.per_task:
-        # Each state can hold many task-specific vignettes; count the total
-        # number of populated (state, task) entries instead of states.
-        total_with_vignette = sum(
-            1
-            for p in store.patient_states()
-            for v in p.task_vignettes.values()
-            if v.strip()
-        )
-    else:
-        total_with_vignette = sum(1 for p in store.patient_states() if p.vignette.strip())
+    # Each state can hold many task-specific vignettes; count the total
+    # number of populated (state, task) entries.
+    total_with_vignette = sum(
+        1
+        for p in store.patient_states()
+        for v in p.task_vignettes.values()
+        if v.strip()
+    )
     logger.info(
         "Done. ok=%d (of which fallback=%d, after_retry=%d, after_shrink=%d) "
         "skip=%d (timeline_fail=%d, empty_timeline=%d); "

@@ -13,6 +13,11 @@ from meds_mcp.similarity.llm_secure_adapter import SecureLLMSummarizer
 
 CORPUS_DIR = "data/collections/dev-corpus"
 
+_TEST_TASK_QUESTION = (
+    "Summarize this thoracic oncology patient's clinical trajectory for similarity retrieval."
+)
+_TEST_TASK_FOCUS = "Highlight diagnosis, stage, treatment received, response, and disease trajectory."
+
 
 def _make_generator() -> tuple[LLMVignetteGenerator, str]:
     xml_files = sorted(Path(CORPUS_DIR).glob("*.xml"))
@@ -25,7 +30,15 @@ def _make_generator() -> tuple[LLMVignetteGenerator, str]:
         model="apim:gpt-4.1-mini",
         generation_overrides={"max_tokens": 512, "temperature": 0.1},
     )
-    return LLMVignetteGenerator(base_generator=base_vg, llm=secure_llm), patient_id
+    return (
+        LLMVignetteGenerator(
+            base_generator=base_vg,
+            llm=secure_llm,
+            task_question=_TEST_TASK_QUESTION,
+            task_focus=_TEST_TASK_FOCUS,
+        ),
+        patient_id,
+    )
 
 
 def _require_llm_env():

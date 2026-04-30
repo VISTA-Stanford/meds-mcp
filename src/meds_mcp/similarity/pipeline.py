@@ -12,7 +12,6 @@ from .bm25_retrieval import PatientBM25Index, SimilarPatient
 from .deterministic_linearization import DeterministicTimelineLinearizationGenerator
 from .llm_secure_adapter import SecureLLMSummarizer
 from .vignette_base import BaseVignetteGenerator
-from .vignette_llm import LLMVignetteGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +114,6 @@ class PatientSimilarityPipeline:
         xml_dir: str,
         model: str = "apim:gpt-4.1-mini",
         n_encounters: Optional[int] = None,
-        system_prompt: Optional[str] = None,
         generation_overrides: Optional[Dict[str, Any]] = None,
         use_llm_vignettes: bool = True,
     ):
@@ -128,16 +126,10 @@ class PatientSimilarityPipeline:
         if use_llm_vignettes:
             self._summarizer = SecureLLMSummarizer(
                 model=model,
-                system_prompt=system_prompt,
                 generation_overrides=generation_overrides
                 or {"temperature": 0.2, "max_tokens": 1024},
             )
-            self._generator: BaseVignetteGenerator = LLMVignetteGenerator(
-                base_generator=self._base_generator,
-                llm=self._summarizer,
-            )
         else:
-            self._generator = self._base_generator
             self._summarizer = None
 
         self._index: Optional[PatientBM25Index] = None
@@ -163,23 +155,44 @@ class PatientSimilarityPipeline:
         person_id: str,
         cutoff_date: Optional[str] = None,
         n_encounters: Optional[int] = None,
+        *,
+        task_question: Optional[str] = None,
+        task_focus: Optional[str] = None,
     ) -> str:
         """Generate a single patient vignette.
 
         ``cutoff_date=None`` means no landmark filter (entire timeline).
         ``n_encounters=None`` falls back to the pipeline-level default.
+
+        When ``use_llm_vignettes=True``, both ``task_question`` and
+        ``task_focus`` must be supplied — vignette generation is task-aware.
         """
         n_enc = n_encounters if n_encounters is not None else self._n_encounters
-        return self._generator.generate(
+        base_text = self._base_generator.generate(
             patient_id=person_id,
             cutoff_date=cutoff_date,
             n_encounters=n_enc,
+        )
+        if not self._use_llm or self._summarizer is None or not base_text.strip():
+            return base_text
+        if task_question is None or task_focus is None:
+            raise ValueError(
+                "task_question and task_focus are required when "
+                "use_llm_vignettes=True."
+            )
+        return self._summarizer.summarize(
+            base_text,
+            task_question=task_question,
+            task_focus=task_focus,
         )
 
     def build_index(
         self,
         records: List[PatientRecord],
         precomputed_vignettes: Optional[Dict[str, str]] = None,
+        *,
+        task_question: Optional[str] = None,
+        task_focus: Optional[str] = None,
     ) -> PatientBM25Index:
         """Build BM25 index from a list of patient records.
 
@@ -189,22 +202,24 @@ class PatientSimilarityPipeline:
             records: List of PatientRecord with person_id and cutoff_date.
             precomputed_vignettes: Optional dict of {person_id: vignette}
                 to skip generation for already-computed patients.
-
-        Returns:
-            The built PatientBM25Index.
+            task_question / task_focus: Required when generation falls through
+                to ``generate_vignette`` and LLM vignettes are enabled.
         """
         vignette_dicts: List[Dict[str, str]] = []
 
         for rec in records:
             pid = rec.person_id
 
-            # Use precomputed vignette if available
             if precomputed_vignettes and pid in precomputed_vignettes:
                 vig = precomputed_vignettes[pid]
             else:
                 try:
                     vig = self.generate_vignette(
-                        pid, rec.cutoff_date, rec.n_encounters
+                        pid,
+                        rec.cutoff_date,
+                        rec.n_encounters,
+                        task_question=task_question,
+                        task_focus=task_focus,
                     )
                 except Exception:
                     logger.warning("Skipping %s: vignette generation failed", pid, exc_info=True)
@@ -225,25 +240,25 @@ class PatientSimilarityPipeline:
         top_k: int = 5,
         n_encounters: Optional[int] = None,
         query_vignette: Optional[str] = None,
+        *,
+        task_question: Optional[str] = None,
+        task_focus: Optional[str] = None,
     ) -> List[SimilarPatient]:
         """Find top-k similar patients for a query patient.
 
-        Args:
-            person_id: Query patient ID.
-            cutoff_date: Optional landmark date; ``None`` uses the full timeline.
-            top_k: Number of similar patients to return.
-            n_encounters: Override encounter limit for query patient.
-            query_vignette: Pre-computed query vignette (skips generation).
-
-        Returns:
-            List of SimilarPatient with person_id, score, vignette.
+        ``task_question`` / ``task_focus`` are required when ``query_vignette``
+        is None and LLM vignettes are enabled.
         """
         if self._index is None:
             raise RuntimeError("Index not built. Call build_index() first.")
 
         if query_vignette is None:
             query_vignette = self.generate_vignette(
-                person_id, cutoff_date, n_encounters
+                person_id,
+                cutoff_date,
+                n_encounters,
+                task_question=task_question,
+                task_focus=task_focus,
             )
 
         return self._index.search(

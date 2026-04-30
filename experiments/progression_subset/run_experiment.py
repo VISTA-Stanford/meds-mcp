@@ -90,7 +90,19 @@ def ensure_query_vignette(
         v = jsonl_vignettes[pid]["vignette"]
         computed[pid] = v
         return v
-    v = pipeline.generate_vignette(pid, cutoff_date=embed_time, n_encounters=n_encounters)
+    v = pipeline.generate_vignette(
+        pid,
+        cutoff_date=embed_time,
+        n_encounters=n_encounters,
+        task_question=(
+            "Summarize this thoracic oncology patient's clinical trajectory "
+            "for similarity retrieval."
+        ),
+        task_focus=(
+            "Highlight diagnosis, stage, treatment received, response, and "
+            "disease trajectory."
+        ),
+    )
     computed[pid] = v
     return v
 
