@@ -87,9 +87,24 @@ def get_task_tool_definition(
     prediction_time: Optional[str] = None,
 ) -> Dict[str, Any]:
     """OpenAI-format tool definition for a task. Clear description of what the tool returns and what inputs it requires."""
-    from meds_mcp.experiments.task_config import TASK_TOOL_RETURNS
-
-    returns_phrase = TASK_TOOL_RETURNS.get(
+    _TASK_TOOL_RETURNS = {
+        "guo_icu": "the specified patient will require ICU admission within 24 hours of the provided prediction time",
+        "guo_los": "the specified patient will have a prolonged hospital length of stay (≥7 days) from admission",
+        "guo_readmission": "the specified patient will be rehospitalized within 30 days of discharge",
+        "new_hypertension": "the specified patient will receive a first-time diagnosis of hypertension within the 1-year period following the prediction time",
+        "new_hyperlipidemia": "the specified patient will receive a first-time diagnosis of hyperlipidemia within the 1-year period following the prediction time",
+        "new_pancan": "the specified patient will receive a first-time diagnosis of pancreatic cancer within the 1-year period following the prediction time",
+        "new_celiac": "the specified patient will receive a first-time diagnosis of celiac disease within the 1-year period following the prediction time",
+        "new_lupus": "the specified patient will receive a first-time diagnosis of lupus within the 1-year period following the prediction time",
+        "new_acutemi": "the specified patient will experience an acute myocardial infarction within the 1-year period following the prediction time",
+        "lab_thrombocytopenia": "the specified patient's next platelet count will be abnormal (prior to the next lab result)",
+        "lab_hyperkalemia": "the specified patient's next potassium level will be abnormal (prior to the next lab result)",
+        "lab_hypoglycemia": "the specified patient's next glucose level will be abnormal (prior to the next lab result)",
+        "lab_hyponatremia": "the specified patient's next sodium level will be abnormal (prior to the next lab result)",
+        "lab_anemia": "the specified patient's next hemoglobin level will be abnormal (prior to the next lab result)",
+        "chexpert": "the specified patient's chest imaging will show an abnormal finding",
+    }
+    returns_phrase = _TASK_TOOL_RETURNS.get(
         task_name,
         f"the specified patient has the outcome for task {task_name}",
     )

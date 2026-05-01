@@ -87,43 +87,45 @@ CohortStore = _cohort.CohortStore
 DeterministicTimelineLinearizationGenerator = _det.DeterministicTimelineLinearizationGenerator
 demographics_block = _det.demographics_block
 TASK_DESCRIPTIONS = _tc.TASK_DESCRIPTIONS
-TASK_VIGNETTE_QUESTIONS = _tc.TASK_VIGNETTE_QUESTIONS
+TASK_QUESTIONS = _tc.TASK_QUESTIONS
 
 from experiments.fewshot_with_labels import _paths
 
 _PROMPTS_DIR = _REPO_ROOT / "configs" / "prompts"
 
 
-_EHRSHOT_TASKS = _tc.BINARY_TASKS
+_EHRSHOT_TASKS = frozenset(_tc.BINARY_TASKS)
+_VISTA_TASKS = frozenset(t for t in _tc.TASK_DESCRIPTIONS if t not in _EHRSHOT_TASKS)
+
+_TEMPLATE_FILES = {
+    "ehrshot": _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt",
+    "vista":   _PROMPTS_DIR / "vignette_prompt_VISTA.txt",
+    "generic": _PROMPTS_DIR / "vignette_prompt_generic.txt",
+}
 
 
 def _load_template(task: str, template_path: Path = None) -> str:
-    """Load the vignette prompt template for a given task.
+    """Return the vignette prompt template for ``task``.
 
-    If ``template_path`` is provided it is used unconditionally. Otherwise
-    selects the EHRSHOT template for EHRSHOT tasks and the VISTA/thoracic
-    template for all others. ``vignette_prompt.txt`` always wins if present
-    (local override).
+    If ``template_path`` is given it is used unconditionally. Otherwise
+    selects EHRSHOT / VISTA / generic based on the task name.
     """
     if template_path is not None:
         if not template_path.exists():
             raise SystemExit(f"Template not found: {template_path}")
         return template_path.read_text().strip()
 
-    override = _PROMPTS_DIR / "vignette_prompt.txt"
-    if override.exists():
-        return override.read_text().strip()
-
     if task in _EHRSHOT_TASKS:
-        ehrshot = _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt"
-        if ehrshot.exists():
-            return ehrshot.read_text().strip()
+        key = "ehrshot"
+    elif task in _VISTA_TASKS:
+        key = "vista"
+    else:
+        key = "generic"
 
-    example = _PROMPTS_DIR / "vignette_prompt.example.txt"
-    if example.exists():
-        return example.read_text().strip()
-
-    raise SystemExit(f"No vignette prompt template found under {_PROMPTS_DIR}")
+    path = _TEMPLATE_FILES[key]
+    if not path.exists():
+        raise SystemExit(f"Prompt template not found: {path}")
+    return path.read_text().strip()
 
 
 def _render_task(item, store, template: str | None, show_timeline: bool, corpus_dir: Path) -> str:
@@ -132,7 +134,7 @@ def _render_task(item, store, template: str | None, show_timeline: bool, corpus_
     vignette = cohort_item.state.vignette_for_task(item.task)
 
     resolved_template = template if template is not None else _load_template(item.task)
-    task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(item.task, "")
+    task_question = item.question.strip() or TASK_QUESTIONS.get(item.task, "")
     system_prompt = resolved_template.format(
         TASK_QUESTION=task_question,
         TASK_FOCUS=TASK_DESCRIPTIONS[item.task].strip(),

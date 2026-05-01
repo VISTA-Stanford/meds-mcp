@@ -10,7 +10,9 @@ from typing import Dict, List, Optional
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _LABELS_DIR = _REPO_ROOT / "data" / "collections" / "ehrshot" / "labels" / "labels_100_0pct_flip"
 
-# All tasks are binary (yes/no). Lab tasks are binarized to normal vs abnormal in label CSVs.
+# ─── Task lists ────────────────────────────────────────────────────────────────
+
+# EHRSHOT benchmark tasks (15 binary tasks, lab tasks binarized to normal vs abnormal)
 BINARY_TASKS = [
     "new_celiac",
     "guo_icu",
@@ -28,8 +30,6 @@ BINARY_TASKS = [
     "lab_thrombocytopenia",
     "chexpert",
 ]
-
-CATEGORICAL_TASKS: List[str] = []  # Kept for backward compat; all tasks treated as binary
 
 # Lab task names (for context formatting: value/unit, collapse by day)
 LAB_TASK_NAMES = {
@@ -61,11 +61,84 @@ TASK_TO_FILENAME: Dict[str, str] = {
     "chexpert": "labels_chexpert.csv",
 }
 
-# Task -> short focus statement for vignette generation (1-2 sentences).
-# Substituted into the {TASK_FOCUS} placeholder of configs/prompts/vignette_prompt.example.txt
-# so the LLM steers the vignette toward information most relevant to the downstream task.
-TASK_DESCRIPTIONS: Dict[str, str] = {
-    # EHRSHOT admin / lab / incident-disease tasks
+# ─── TASK_QUESTIONS ─────────────────────────────────────────────────────────────
+# Short direct question per task substituted into the {TASK_QUESTION} placeholder
+# in the vignette prompt templates.  EHRSHOT tasks use concise "Will the patient…?"
+# forms; VISTA tasks use the question strings from the BigQuery cohort table.
+
+TASK_QUESTIONS: Dict[str, str] = {
+    # EHRSHOT tasks
+    "guo_readmission":     "Will the patient be readmitted to the hospital within 30 days?",
+    "guo_icu":             "Will the patient be transferred to the intensive care unit?",
+    "guo_los":             "Will the patient stay in the hospital for more than 7 days?",
+    "lab_thrombocytopenia":"Will the patient's next platelet count be abnormal?",
+    "lab_hyperkalemia":    "Will the patient's next potassium level be abnormal?",
+    "lab_hypoglycemia":    "Will the patient's next glucose level be abnormal?",
+    "lab_hyponatremia":    "Will the patient's next sodium level be abnormal?",
+    "lab_anemia":          "Will the patient's next hemoglobin level be abnormal?",
+    "new_hypertension":    "Will the patient be newly diagnosed with hypertension in the next year?",
+    "new_hyperlipidemia":  "Will the patient be newly diagnosed with hyperlipidemia in the next year?",
+    "new_pancan":          "Will the patient be newly diagnosed with pancreatic cancer in the next year?",
+    "new_celiac":          "Will the patient be newly diagnosed with celiac disease in the next year?",
+    "new_lupus":           "Will the patient be newly diagnosed with lupus in the next year?",
+    "new_acutemi":         "Will the patient experience an acute myocardial infarction in the next year?",
+    "chexpert":            "Will the patient's chest imaging show an abnormal finding?",
+}
+
+# VISTA thoracic-oncology tasks — generated from BigQuery question templates.
+_THORACIC_HORIZON_QUESTION_TEMPLATES: Dict[str, str] = {
+    "died_any_cause": (
+        "Based on the provided medical history and cancer evidence, will the patient"
+        " experience all-cause mortality within {n} year(s) of treatment initiation?"
+    ),
+    "died_of_cancer": (
+        "Based on the provided medical history and cancer evidence, is cancer-related"
+        " mortality expected within {n} year{s} of treatment initiation?"
+    ),
+    "died_other_cause": (
+        "Given the recent cancer evidence and medical history, will the patient experience"
+        " non-cancer mortality within {n} year{s}?"
+    ),
+    "has_progression_nonrecurrence": (
+        "Based on the patient's clinical history and current cancer-related evidence, will"
+        " the patient experience disease progression within {n} year{s} after treatment initiation?"
+    ),
+    "has_recurrence": (
+        "Based on the patient's clinical history and current cancer-related evidence, will"
+        " the patient achieve an initial treatment response but experience cancer recurrence"
+        " within {n} year{s} of treatment initiation?"
+    ),
+    "has_stable_disease": (
+        "Based on the provided medical history and cancer evidence, will the patient be"
+        " clinically stable at {n} year{s}? Clinical stability is defined as being alive with"
+        " persistent disease and no evidence of disease progression."
+    ),
+    "is_cured_by_horizon": (
+        "Based on the patient's clinical history and current cancer-related evidence, will the"
+        " patient be free of cancer {n} year{s} after treatment initiation?"
+    ),
+    "progression_recurrence_free_survival": (
+        "Based on the patient's clinical history and current cancer-related evidence, will the"
+        " patient remain free of disease progression or recurrence at {n} year{s} after"
+        " treatment initiation?"
+    ),
+}
+
+for _family, _q_template in _THORACIC_HORIZON_QUESTION_TEMPLATES.items():
+    for _n in (1, 2, 3, 4, 5):
+        TASK_QUESTIONS[f"{_family}_{_n}_yr"] = _q_template.format(
+            n=_n, s="" if _n == 1 else "s",
+        )
+
+del _family, _q_template, _n
+
+# ─── TASK_FOCUS ──────────────────────────────────────────────────────────────────
+# Focus statement per task substituted into the {TASK_FOCUS} placeholder in the
+# vignette prompt templates.  Steers the LLM toward clinically relevant details
+# for each downstream prediction task.
+
+TASK_FOCUS: Dict[str, str] = {
+    # EHRSHOT tasks
     "guo_los": (
         "Highlight admission acuity, comorbidity burden, prior length-of-stay patterns, and any factors likely to delay discharge. Prioritize:\n"
         "- Reason for admission and acuity (sepsis, organ failure, surgery type).\n"
@@ -170,14 +243,7 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
     ),
 }
 
-
-# ---------------------------------------------------------------------------
-# Thoracic-oncology outcome tasks present in
-# experiments/fewshot_with_labels/outputs/items.jsonl. Eight families × five
-# horizons (1, 2, 3, 4, 5 years) = 40 entries, generated from a template per
-# family so the wording stays consistent.
-# ---------------------------------------------------------------------------
-
+# VISTA thoracic-oncology tasks — generated from templates (8 families × 5 horizons = 40 entries).
 _THORACIC_HORIZON_TASK_TEMPLATES: Dict[str, str] = {
     "died_any_cause": (
         "Highlight stage at diagnosis, treatment response, performance status, comorbidity burden, and any progression or deterioration relevant to {n}-year overall survival. Prioritize:\n"
@@ -239,32 +305,18 @@ _THORACIC_HORIZON_TASK_TEMPLATES: Dict[str, str] = {
 
 for _family, _template in _THORACIC_HORIZON_TASK_TEMPLATES.items():
     for _n in (1, 2, 3, 4, 5):
-        TASK_DESCRIPTIONS[f"{_family}_{_n}_yr"] = _template.format(
+        TASK_FOCUS[f"{_family}_{_n}_yr"] = _template.format(
             n=_n, s="" if _n == 1 else "s",
         )
 
 del _family, _template, _n
 
-# Task -> clause for tool description: "the likelihood that {phrase}" (no "whether").
-TASK_TOOL_RETURNS: Dict[str, str] = {
-    "guo_icu": "the specified patient will require ICU admission within 24 hours of the provided prediction time",
-    "guo_los": "the specified patient will have a prolonged hospital length of stay (≥7 days) from admission",
-    "guo_readmission": "the specified patient will be rehospitalized within 30 days of discharge",
-    "new_hypertension": "the specified patient will receive a first-time diagnosis of hypertension within the 1-year period following the prediction time",
-    "new_hyperlipidemia": "the specified patient will receive a first-time diagnosis of hyperlipidemia within the 1-year period following the prediction time",
-    "new_pancan": "the specified patient will receive a first-time diagnosis of pancreatic cancer within the 1-year period following the prediction time",
-    "new_celiac": "the specified patient will receive a first-time diagnosis of celiac disease within the 1-year period following the prediction time",
-    "new_lupus": "the specified patient will receive a first-time diagnosis of lupus within the 1-year period following the prediction time",
-    "new_acutemi": "the specified patient will experience an acute myocardial infarction within the 1-year period following the prediction time",
-    "lab_thrombocytopenia": "the specified patient's next platelet count will be abnormal (prior to the next lab result)",
-    "lab_hyperkalemia": "the specified patient's next potassium level will be abnormal (prior to the next lab result)",
-    "lab_hypoglycemia": "the specified patient's next glucose level will be abnormal (prior to the next lab result)",
-    "lab_hyponatremia": "the specified patient's next sodium level will be abnormal (prior to the next lab result)",
-    "lab_anemia": "the specified patient's next hemoglobin level will be abnormal (prior to the next lab result)",
-    "chexpert": "the specified patient's chest imaging will show an abnormal finding",
-}
+# Alias so existing callers that import TASK_DESCRIPTIONS continue to work.
+TASK_DESCRIPTIONS = TASK_FOCUS
 
-# Task -> prediction target phrasing for user prompt (time horizon + target).
+# ─── Supporting dicts ─────────────────────────────────────────────────────────
+
+# Task -> prediction target phrasing used in zero-shot LLM prompts.
 TASK_PREDICTION_TARGET: Dict[str, str] = {
     "guo_icu": "will require ICU admission within 24 hours of the prediction time",
     "guo_los": "will have a prolonged hospital length of stay (≥7 days) from admission",
@@ -283,45 +335,7 @@ TASK_PREDICTION_TARGET: Dict[str, str] = {
     "chexpert": "will have chest imaging showing an abnormal finding",
 }
 
-# Task -> short direct question for vignette-generation prompt (TASK_QUESTION placeholder).
-# These are the concise "Will the patient..." forms stored in item.question at cohort-build time.
-TASK_VIGNETTE_QUESTIONS: Dict[str, str] = {
-    "guo_readmission": "Will the patient be readmitted to the hospital within 30 days?",
-    "guo_icu": "Will the patient be transferred to the intensive care unit?",
-    "guo_los": "Will the patient stay in the hospital for more than 7 days?",
-    "lab_thrombocytopenia": "Will the patient's thrombocytopenia lab come back as abnormal?",
-    "lab_hyperkalemia": "Will the patient's hyperkalemia lab come back as abnormal?",
-    "lab_hypoglycemia": "Will the patient's hypoglycemia lab come back as abnormal?",
-    "lab_hyponatremia": "Will the patient's hyponatremia lab come back as abnormal?",
-    "lab_anemia": "Will the patient's anemia lab come back as abnormal?",
-    "new_hypertension": "Will the patient develop hypertension in the next year?",
-    "new_hyperlipidemia": "Will the patient develop hyperlipidemia in the next year?",
-    "new_pancan": "Will the patient develop pancreatic cancer in the next year?",
-    "new_celiac": "Will the patient develop celiac disease in the next year?",
-    "new_lupus": "Will the patient develop lupus in the next year?",
-    "new_acutemi": "Will the patient develop an acute myocardial infarction in the next year?",
-    "chexpert": "Will the patient's chest X-ray come back as abnormal?",
-}
-
-# Task -> question template (one patient). All questions are binary (yes/no).
-TASK_QUESTIONS: Dict[str, str] = {
-    "guo_readmission": "Based on this patient's health status and discharge profile, is it likely they will require rehospitalization soon after discharge?",
-    "guo_los": "Based on this patient's condition at admission, is it likely that this hospitalization will require a prolonged stay?",
-    "guo_icu": "Given this patient's presentation and early hospital course, is it likely they will deteriorate and require transfer to intensive care?",
-    "new_hypertension": "Based on this patient's clinical history to date, is it likely they will develop chronic high blood pressure within the next year?",
-    "new_hyperlipidemia": "Based on this patient's current health profile, is it likely they will be diagnosed with elevated cholesterol or lipid abnormalities within the next year?",
-    "new_pancan": "Based on this patient's history and risk factors, is it likely they will be diagnosed with pancreatic cancer within the next year?",
-    "new_celiac": "Based on this patient's medical history and symptoms, is it likely they will be diagnosed with celiac disease within the next year?",
-    "new_lupus": "Based on this patient's clinical trajectory, is it likely they will be diagnosed with systemic lupus within the next year?",
-    "new_acutemi": "Based on this patient's cardiovascular risk profile and history, is it likely they will experience a heart attack within the next year?",
-    "lab_thrombocytopenia": "Based on this patient's current condition, is it likely their next platelet count will be abnormal?",
-    "lab_hyperkalemia": "Based on this patient's clinical status and medications, is it likely their next potassium level will be abnormal?",
-    "lab_hypoglycemia": "Based on this patient's metabolic status, is it likely their next glucose level will be abnormal?",
-    "lab_hyponatremia": "Based on this patient's fluid and electrolyte balance, is it likely their next sodium level will be abnormal?",
-    "lab_anemia": "Based on this patient's hematologic status, is it likely their next hemoglobin level will be abnormal?",
-    "chexpert": "Based on this patient's clinical data, is it likely their chest imaging will show an abnormal finding?",
-}
-
+# ─── Helper functions ─────────────────────────────────────────────────────────
 
 def get_labels_dir() -> Path:
     """Return the labels directory. Override via VISTA_LABELS_DIR env var."""
@@ -344,18 +358,11 @@ def is_binary_task(task_name: str) -> bool:
     return task_name in BINARY_TASKS
 
 
-def is_categorical_task(task_name: str) -> bool:
-    return task_name in CATEGORICAL_TASKS
-
-
 def get_patient_ids_from_task_csvs(
     tasks: List[str],
     limit_per_task: Optional[int] = None,
 ) -> List[str]:
-    """
-    Collect all unique patient_ids from the given task CSV files.
-    Used to load only the subset of patients needed for the experiment.
-    """
+    """Collect unique patient_ids from the given task CSV files."""
     patient_ids = []
     seen = set()
     labels_dir = get_labels_dir()

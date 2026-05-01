@@ -16,71 +16,51 @@ from meds_mcp.server.llm import (
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[3] / "configs" / "prompts"
-_PROMPT_FILE = _PROMPTS_DIR / "vignette_prompt.txt"
 _PROMPT_EHRSHOT_FILE = _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt"
-_PROMPT_EXAMPLE_FILE = _PROMPTS_DIR / "vignette_prompt.example.txt"
+_PROMPT_VISTA_FILE = _PROMPTS_DIR / "vignette_prompt_VISTA.txt"
+_PROMPT_GENERIC_FILE = _PROMPTS_DIR / "vignette_prompt_generic.txt"
 
-# EHRSHOT task names — these use the EHRSHOT-specific prompt template.
-_EHRSHOT_TASKS = {
-    "guo_icu", "guo_los", "guo_readmission",
-    "new_celiac", "new_lupus", "new_acutemi", "new_pancan",
-    "new_hyperlipidemia", "new_hypertension",
-    "lab_anemia", "lab_hyperkalemia", "lab_hypoglycemia",
-    "lab_hyponatremia", "lab_thrombocytopenia",
-    "chexpert",
-}
-
-
-def _validate_template(text: str, path: Path) -> str:
-    for placeholder in ("{TASK_QUESTION}", "{TASK_FOCUS}"):
-        if placeholder not in text:
-            raise ValueError(
-                f"Prompt template {path} is missing required placeholder {placeholder}."
-            )
-    return text
-
-
-def load_vignette_prompt() -> str:
-    """Load the default (VISTA/thoracic) vignette prompt template.
-
-    Prefers ``vignette_prompt.txt`` (gitignored, for local customization) and
-    falls back to the tracked ``vignette_prompt.example.txt``.
-    """
-    for candidate in (_PROMPT_FILE, _PROMPT_EXAMPLE_FILE):
-        if candidate.exists():
-            return _validate_template(candidate.read_text().strip(), candidate)
-    raise FileNotFoundError(
-        f"No vignette prompt template found at {_PROMPT_FILE} or {_PROMPT_EXAMPLE_FILE}."
-    )
+# Imported lazily to avoid circular imports at module load time.
+def _get_task_sets() -> tuple[frozenset, frozenset]:
+    from meds_mcp.experiments.task_config import BINARY_TASKS, TASK_DESCRIPTIONS
+    ehrshot = frozenset(BINARY_TASKS)
+    vista = frozenset(t for t in TASK_DESCRIPTIONS if t not in ehrshot)
+    return ehrshot, vista
 
 
 def load_vignette_prompt_for_task(task: str) -> str:
-    """Load the appropriate vignette prompt template for a given task.
+    """Return the correct vignette prompt template for ``task``.
 
-    EHRSHOT tasks (guo_*, lab_*, new_*, chexpert) use
-    ``vignette_prompt_EHRSHOT.txt``. All other tasks (VISTA/thoracic horizon
-    tasks) use ``vignette_prompt.txt`` / ``vignette_prompt.example.txt``.
-    In both cases ``vignette_prompt.txt`` takes priority as a local override.
+    - EHRSHOT tasks  → ``vignette_prompt_EHRSHOT.txt``
+    - VISTA tasks    → ``vignette_prompt_VISTA.txt``
+    - Anything else  → ``vignette_prompt_generic.txt``
     """
-    if task in _EHRSHOT_TASKS:
-        for candidate in (_PROMPT_FILE, _PROMPT_EHRSHOT_FILE, _PROMPT_EXAMPLE_FILE):
-            if candidate.exists():
-                return _validate_template(candidate.read_text().strip(), candidate)
+    ehrshot_tasks, vista_tasks = _get_task_sets()
+    if task in ehrshot_tasks:
+        target = _PROMPT_EHRSHOT_FILE
+    elif task in vista_tasks:
+        target = _PROMPT_VISTA_FILE
     else:
-        for candidate in (_PROMPT_FILE, _PROMPT_EXAMPLE_FILE):
-            if candidate.exists():
-                return _validate_template(candidate.read_text().strip(), candidate)
-    raise FileNotFoundError(
-        f"No vignette prompt template found for task '{task}' under {_PROMPTS_DIR}."
-    )
+        target = _PROMPT_GENERIC_FILE
+    if not target.exists():
+        raise FileNotFoundError(f"Prompt template not found: {target}")
+    return target.read_text().strip()
+
+
+# Keep the old name as an alias so existing callers don't break.
+def load_vignette_prompt() -> str:
+    """Load the VISTA prompt template (legacy entry point)."""
+    if not _PROMPT_VISTA_FILE.exists():
+        raise FileNotFoundError(f"Prompt template not found: {_PROMPT_VISTA_FILE}")
+    return _PROMPT_VISTA_FILE.read_text().strip()
 
 
 class SecureLLMSummarizer:
     """LLM adapter that renders a task-aware vignette prompt for a single patient.
 
-    The system prompt is selected per task (EHRSHOT vs VISTA) with
-    ``{TASK_QUESTION}`` and ``{TASK_FOCUS}`` filled per call.
-    The user message is the patient timeline.
+    Selects EHRSHOT, VISTA, or generic template based on the task name.
+    ``{TASK_QUESTION}`` and ``{TASK_FOCUS}`` are filled per call for templates
+    that contain those placeholders; the generic template is used as-is.
     """
 
     def __init__(
@@ -90,18 +70,21 @@ class SecureLLMSummarizer:
     ):
         self.client = get_llm_client(model_name=model)
         self.model = model
-        # Pre-load both templates at init so file I/O happens once.
-        self._ehrshot_template = (
-            _validate_template(_PROMPT_EHRSHOT_FILE.read_text().strip(), _PROMPT_EHRSHOT_FILE)
-            if _PROMPT_EHRSHOT_FILE.exists() else load_vignette_prompt()
-        )
-        self._default_template = load_vignette_prompt()
+        # Pre-load all three templates at init so file I/O happens once.
+        self._templates = {
+            "ehrshot": _PROMPT_EHRSHOT_FILE.read_text().strip() if _PROMPT_EHRSHOT_FILE.exists() else "",
+            "vista": _PROMPT_VISTA_FILE.read_text().strip() if _PROMPT_VISTA_FILE.exists() else "",
+            "generic": _PROMPT_GENERIC_FILE.read_text().strip() if _PROMPT_GENERIC_FILE.exists() else "",
+        }
+        self._ehrshot_tasks, self._vista_tasks = _get_task_sets()
         self.gen_config = get_default_generation_config(generation_overrides)
 
     def _template_for_task(self, task: Optional[str]) -> str:
-        if task and task in _EHRSHOT_TASKS:
-            return self._ehrshot_template
-        return self._default_template
+        if task and task in self._ehrshot_tasks:
+            return self._templates["ehrshot"]
+        if task and task in self._vista_tasks:
+            return self._templates["vista"]
+        return self._templates["generic"]
 
     def render_system_prompt(self, task_question: str, task_focus: str, task: Optional[str] = None) -> str:
         """Substitute the task fields into the appropriate template."""
@@ -122,12 +105,9 @@ class SecureLLMSummarizer:
 
         Args:
             text: Patient timeline (with demographics prelude).
-            task_question: The exact downstream-task question. Substituted into
-                ``{TASK_QUESTION}``.
-            task_focus: 1-2 sentence focus statement for the task. Substituted
-                into ``{TASK_FOCUS}``.
-            task: Task name used to select the correct prompt template
-                (EHRSHOT vs VISTA). If None, defaults to the VISTA template.
+            task_question: Substituted into ``{TASK_QUESTION}`` (no-op for generic template).
+            task_focus: Substituted into ``{TASK_FOCUS}`` (no-op for generic template).
+            task: Task name used to select EHRSHOT / VISTA / generic template.
         """
         response = self.client.chat.completions.create(
             model=self.model,
