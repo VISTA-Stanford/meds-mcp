@@ -87,41 +87,14 @@ TASK_QUESTIONS: Dict[str, str] = {
 
 # VISTA thoracic-oncology tasks — generated from BigQuery question templates.
 _THORACIC_HORIZON_QUESTION_TEMPLATES: Dict[str, str] = {
-    "died_any_cause": (
-        "Based on the provided medical history and cancer evidence, will the patient"
-        " experience all-cause mortality within {n} year(s) of treatment initiation?"
-    ),
-    "died_of_cancer": (
-        "Based on the provided medical history and cancer evidence, is cancer-related"
-        " mortality expected within {n} year{s} of treatment initiation?"
-    ),
-    "died_other_cause": (
-        "Given the recent cancer evidence and medical history, will the patient experience"
-        " non-cancer mortality within {n} year{s}?"
-    ),
-    "has_progression_nonrecurrence": (
-        "Based on the patient's clinical history and current cancer-related evidence, will"
-        " the patient experience disease progression within {n} year{s} after treatment initiation?"
-    ),
-    "has_recurrence": (
-        "Based on the patient's clinical history and current cancer-related evidence, will"
-        " the patient achieve an initial treatment response but experience cancer recurrence"
-        " within {n} year{s} of treatment initiation?"
-    ),
-    "has_stable_disease": (
-        "Based on the provided medical history and cancer evidence, will the patient be"
-        " clinically stable at {n} year{s}? Clinical stability is defined as being alive with"
-        " persistent disease and no evidence of disease progression."
-    ),
-    "is_cured_by_horizon": (
-        "Based on the patient's clinical history and current cancer-related evidence, will the"
-        " patient be free of cancer {n} year{s} after treatment initiation?"
-    ),
-    "progression_recurrence_free_survival": (
-        "Based on the patient's clinical history and current cancer-related evidence, will the"
-        " patient remain free of disease progression or recurrence at {n} year{s} after"
-        " treatment initiation?"
-    ),
+    "died_any_cause": "Will the patient experience all-cause mortality within {n} year(s) of treatment initiation?",
+    "died_of_cancer": "Is cancer-related mortality expected within {n} year{s} of treatment initiation?",
+    "died_other_cause": "Will the patient experience non-cancer mortality within {n} year{s}?",
+    "has_progression_nonrecurrence": "Will the patient experience disease progression within {n} year{s} after treatment initiation?",
+    "has_recurrence": "Will the patient achieve an initial treatment response but experience cancer recurrence within {n} year{s} of treatment initiation?",
+    "has_stable_disease": "Will the patient be clinically stable at {n} year{s}? Clinical stability is defined as being alive with persistent disease and no evidence of disease progression.",
+    "is_cured_by_horizon": "Will the patient be free of cancer {n} year{s} after treatment initiation?",
+    "progression_recurrence_free_survival": "Will the patient remain free of disease progression or recurrence at {n} year{s} after treatment initiation?",
 }
 
 for _family, _q_template in _THORACIC_HORIZON_QUESTION_TEMPLATES.items():
