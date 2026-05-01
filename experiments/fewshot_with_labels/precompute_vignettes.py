@@ -322,6 +322,7 @@ def main() -> None:
     def _summarize_with_retry(
         text: str, pid: str, et: str,
         *,
+        task_name: str,
         task_question: str,
         task_focus: str,
     ) -> tuple[str | None, int, bool]:
@@ -347,6 +348,7 @@ def main() -> None:
                 return (
                     summarizer.summarize(
                         current,
+                        task=task_name,
                         task_question=task_question,
                         task_focus=task_focus,
                     ),
@@ -439,6 +441,7 @@ def main() -> None:
             task_focus = TASK_DESCRIPTIONS[task_name]
             v, attempts_used, was_shrunk = _summarize_with_retry(
                 text, p.person_id, p.embed_time,
+                task_name=task_name,
                 task_question=task_question,
                 task_focus=task_focus,
             )

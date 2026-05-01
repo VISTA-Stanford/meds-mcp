@@ -22,7 +22,7 @@ for _p in (_REPO_ROOT / "src", _REPO_ROOT):
         sys.path.insert(0, str(_p))
 
 from meds_mcp.similarity import CohortStore, DeterministicTimelineLinearizationGenerator, demographics_block
-from meds_mcp.similarity.llm_secure_adapter import load_vignette_prompt
+from meds_mcp.similarity.llm_secure_adapter import load_vignette_prompt_for_task
 from meds_mcp.experiments.task_config import TASK_DESCRIPTIONS
 from experiments.fewshot_with_labels import _paths
 
@@ -81,7 +81,6 @@ def main() -> None:
 
     store = CohortStore.load(args.patients, args.items)
     linearizer = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
-    template = load_vignette_prompt()
 
     pid_filter: set[str] | None = None
     if args.person_ids_file is not None:
@@ -153,7 +152,7 @@ def main() -> None:
         if not user_text.strip():
             continue
 
-        task_system_prompt = template.format(
+        task_system_prompt = load_vignette_prompt_for_task(task).format(
             TASK_QUESTION=question.strip(),
             TASK_FOCUS=TASK_DESCRIPTIONS[task].strip(),
         )

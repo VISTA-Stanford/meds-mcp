@@ -94,29 +94,46 @@ from experiments.fewshot_with_labels import _paths
 _PROMPTS_DIR = _REPO_ROOT / "configs" / "prompts"
 
 
-def _load_template(template_path: Path = None) -> str:
-    """Load the vignette prompt template without importing the LLM client."""
+_EHRSHOT_TASKS = _tc.BINARY_TASKS
+
+
+def _load_template(task: str, template_path: Path = None) -> str:
+    """Load the vignette prompt template for a given task.
+
+    If ``template_path`` is provided it is used unconditionally. Otherwise
+    selects the EHRSHOT template for EHRSHOT tasks and the VISTA/thoracic
+    template for all others. ``vignette_prompt.txt`` always wins if present
+    (local override).
+    """
     if template_path is not None:
         if not template_path.exists():
             raise SystemExit(f"Template not found: {template_path}")
         return template_path.read_text().strip()
-    for candidate in (
-        _PROMPTS_DIR / "vignette_prompt.txt",
-        _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt",
-        _PROMPTS_DIR / "vignette_prompt.example.txt",
-    ):
-        if candidate.exists():
-            return candidate.read_text().strip()
+
+    override = _PROMPTS_DIR / "vignette_prompt.txt"
+    if override.exists():
+        return override.read_text().strip()
+
+    if task in _EHRSHOT_TASKS:
+        ehrshot = _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt"
+        if ehrshot.exists():
+            return ehrshot.read_text().strip()
+
+    example = _PROMPTS_DIR / "vignette_prompt.example.txt"
+    if example.exists():
+        return example.read_text().strip()
+
     raise SystemExit(f"No vignette prompt template found under {_PROMPTS_DIR}")
 
 
-def _render_task(item, store, template: str, show_timeline: bool, corpus_dir: Path) -> str:
+def _render_task(item, store, template: str | None, show_timeline: bool, corpus_dir: Path) -> str:
     """Render the full output block for one (person_id, task) item."""
     cohort_item = store.join(item.person_id, item.task)
     vignette = cohort_item.state.vignette_for_task(item.task)
 
+    resolved_template = template if template is not None else _load_template(item.task)
     task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(item.task, "")
-    system_prompt = template.format(
+    system_prompt = resolved_template.format(
         TASK_QUESTION=task_question,
         TASK_FOCUS=TASK_DESCRIPTIONS[item.task].strip(),
     )
@@ -189,7 +206,8 @@ def main() -> None:
         )
 
     store = CohortStore.load(args.patients, args.items)
-    template = _load_template(args.template)
+    # Template is resolved per-task in all-tasks mode; resolved once here in single-task mode.
+    template = _load_template(args.task, args.template) if args.task else None
 
     if args.task is not None:
         # Single-task mode: print to stdout.
