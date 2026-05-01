@@ -13,21 +13,15 @@ Pass --show-timeline to also print the raw LUMIA linearization that was used
 as the LLM user message (requires --corpus-dir).
 
 Examples:
-  # Print to stdout
   uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
-    --person-id 135908719 --task has_recurrence_1_yr
-
-  # Write to a specific file
-  uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
-    --person-id 135908719 --task has_recurrence_1_yr \\
-    --out /tmp/prompt.txt
-
-  # Auto-named file in cwd: vignette_prompt_<pid>_<task>.txt
-  uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
-    --person-id 135908719 --task has_recurrence_1_yr --export
     --person-id 115973549 --task guo_readmission \\
     --patients experiments/fewshot_with_labels/outputs/ehrshot/patients.jsonl \\
     --items experiments/fewshot_with_labels/outputs/ehrshot/items.jsonl
+
+  # Also show the raw LUMIA timeline that was fed to the vignette LLM:
+  uv run python experiments/fewshot_with_labels/show_vignette_prompt.py \\
+    --person-id 115973549 --task guo_readmission --show-timeline \\
+    --corpus-dir data/ehrshot_lumia/meds_corpus
 """
 
 from __future__ import annotations
@@ -100,121 +94,129 @@ from experiments.fewshot_with_labels import _paths
 _PROMPTS_DIR = _REPO_ROOT / "configs" / "prompts"
 
 
-def _load_template() -> str:
+def _load_template(template_path: Path = None) -> str:
     """Load the vignette prompt template without importing the LLM client."""
-    for candidate in (_PROMPTS_DIR / "vignette_prompt.txt", _PROMPTS_DIR / "vignette_prompt.example.txt"):
+    if template_path is not None:
+        if not template_path.exists():
+            raise SystemExit(f"Template not found: {template_path}")
+        return template_path.read_text().strip()
+    for candidate in (
+        _PROMPTS_DIR / "vignette_prompt.txt",
+        _PROMPTS_DIR / "vignette_prompt_EHRSHOT.txt",
+        _PROMPTS_DIR / "vignette_prompt.example.txt",
+    ):
         if candidate.exists():
             return candidate.read_text().strip()
     raise SystemExit(f"No vignette prompt template found under {_PROMPTS_DIR}")
 
 
+def _render_task(item, store, template: str, show_timeline: bool, corpus_dir: Path) -> str:
+    """Render the full output block for one (person_id, task) item."""
+    cohort_item = store.join(item.person_id, item.task)
+    vignette = cohort_item.state.vignette_for_task(item.task)
+
+    task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(item.task, "")
+    system_prompt = template.format(
+        TASK_QUESTION=task_question,
+        TASK_FOCUS=TASK_DESCRIPTIONS[item.task].strip(),
+    )
+
+    lines = [
+        "=" * 80,
+        f"PID  : {item.person_id}",
+        f"TASK : {item.task}",
+        f"EMBED: {item.embed_time}",
+        f"LABEL: {item.label} ({item.label_description})",
+        "=" * 80,
+        "",
+        "[VIGNETTE GENERATION PROMPT]",
+        "",
+        system_prompt,
+        "",
+        "=" * 80,
+        "",
+        "[GENERATED VIGNETTE]",
+        "",
+        vignette if vignette.strip() else "[no vignette precomputed]",
+    ]
+
+    if show_timeline:
+        gen = DeterministicTimelineLinearizationGenerator(str(corpus_dir))
+        timeline = gen.generate(item.person_id, cutoff_date=item.embed_time)
+        demos = demographics_block(
+            xml_dir=str(corpus_dir),
+            patient_id=item.person_id,
+            cutoff_date=item.embed_time,
+        )
+        user_msg = (demos + "\n" + timeline) if demos else timeline
+        lines += [
+            "",
+            "=" * 80,
+            "",
+            f"[RAW LUMIA TIMELINE]  ({len(user_msg)} chars)",
+            "",
+            user_msg,
+        ]
+
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--person-id", required=True, type=str)
-    parser.add_argument("--task", required=True, type=str)
+    parser.add_argument("--task", default=None, type=str,
+                        help="Task name. If omitted, all tasks for this patient are written "
+                             "to a folder under outputs/patient_<person_id>/.")
     parser.add_argument("--patients", type=Path, default=_paths.patients_jsonl())
     parser.add_argument("--items", type=Path, default=_paths.items_jsonl())
     parser.add_argument("--corpus-dir", type=Path, default=_paths.corpus_dir())
     parser.add_argument(
-        "--out",
+        "--template",
         type=Path,
         default=None,
-        help="Write the rendered prompt to this path instead of stdout.",
-    )
-    parser.add_argument(
-        "--export",
-        action="store_true",
-        help=(
-            "Write to an auto-named file vignette_prompt_<pid>_<task>.txt in "
-            "the current directory. Ignored when --out is also given."
-        ),
+        help="Path to a vignette prompt template. Defaults to vignette_prompt_EHRSHOT.txt.",
     )
     parser.add_argument(
         "--show-timeline",
         action="store_true",
-        help="Also print the raw LUMIA linearization (requires --corpus-dir).",
+        help="Also include the raw LUMIA linearization (requires --corpus-dir).",
     )
     args = parser.parse_args()
 
-    if args.task not in TASK_DESCRIPTIONS:
+    if args.task is not None and args.task not in TASK_DESCRIPTIONS:
         raise SystemExit(
             f"Unknown task {args.task!r}. Known: {sorted(TASK_DESCRIPTIONS)}"
         )
 
     store = CohortStore.load(args.patients, args.items)
-    matches = [
-        it
-        for it in store.items_for_patient(args.person_id)
-        if it.task == args.task
-    ]
-    if not matches:
-        raise SystemExit(
-            f"No item for person_id={args.person_id} task={args.task}."
-        )
-    item = matches[0]
+    template = _load_template(args.template)
 
-    cohort_item = store.join(args.person_id, args.task)
-    vignette = cohort_item.state.vignette_for_task(args.task)
-
-    task_question = item.question.strip() or TASK_VIGNETTE_QUESTIONS.get(args.task, "")
-    system_prompt = _load_template().format(
-        TASK_QUESTION=task_question,
-        TASK_FOCUS=TASK_DESCRIPTIONS[args.task].strip(),
-    )
-
-    sections = [
-        "=" * 80,
-        f"PID  : {args.person_id}",
-        f"TASK : {args.task}",
-        f"EMBED: {item.embed_time}",
-        f"LABEL: {item.label} ({item.label_description})",
-        "=" * 80,
-        "",
-        "[SYSTEM PROMPT]",
-        "",
-        system_prompt,
-        "",
-        "=" * 80,
-        f"[USER MESSAGE]  ({len(user_msg)} chars)",
-        "",
-        user_msg,
-    ]
-    output = "\n".join(sections)
-
-    out_path = args.out
-    if out_path is None and args.export:
-        out_path = Path.cwd() / f"vignette_prompt_{args.person_id}_{args.task}.txt"
-
-    if out_path is not None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(output)
-        print(f"Wrote {len(output)} chars to {out_path}")
+    if args.task is not None:
+        # Single-task mode: print to stdout.
+        matches = [it for it in store.items_for_patient(args.person_id) if it.task == args.task]
+        if not matches:
+            raise SystemExit(f"No item for person_id={args.person_id} task={args.task}.")
+        print(_render_task(matches[0], store, template, args.show_timeline, args.corpus_dir))
     else:
-        print(output)
-    print("=" * 80)
-    print(f"PID  : {args.person_id}")
-    print(f"TASK : {args.task}")
-    print(f"EMBED: {item.embed_time}")
-    print(f"LABEL: {item.label} ({item.label_description})")
-    print("=" * 80)
-    print("\n[VIGNETTE GENERATION PROMPT]\n")
-    print(system_prompt)
-    print("\n" + "=" * 80)
-    print("\n[GENERATED VIGNETTE]\n")
-    print(vignette if vignette.strip() else "[no vignette precomputed]")
+        # All-tasks mode: write one file per task into outputs/patient_<pid>/.
+        all_items = store.items_for_patient(args.person_id)
+        if not all_items:
+            raise SystemExit(f"No items found for person_id={args.person_id}.")
 
-    if args.show_timeline:
-        gen = DeterministicTimelineLinearizationGenerator(str(args.corpus_dir))
-        timeline = gen.generate(args.person_id, cutoff_date=item.embed_time)
-        demos = demographics_block(
-            xml_dir=str(args.corpus_dir),
-            patient_id=args.person_id,
-            cutoff_date=item.embed_time,
-        )
-        user_msg = (demos + "\n" + timeline) if demos else timeline
-        print("\n" + "=" * 80)
-        print(f"\n[RAW LUMIA TIMELINE]  ({len(user_msg)} chars)\n")
-        print(user_msg)
+        # Deduplicate: one item per task (store.join uses the same dedup logic).
+        unique_tasks = sorted({it.task for it in all_items})
+
+        out_dir = _paths.outputs_dir() / f"patient_{args.person_id}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for task in unique_tasks:
+            item = store.join(args.person_id, task).item
+            content = _render_task(item, store, template, args.show_timeline, args.corpus_dir)
+            out_file = out_dir / f"{task}.txt"
+            out_file.write_text(content)
+            print(f"Wrote {out_file}")
+
+        print(f"\nAll tasks for patient {args.person_id} written to {out_dir}")
 
 
 if __name__ == "__main__":
