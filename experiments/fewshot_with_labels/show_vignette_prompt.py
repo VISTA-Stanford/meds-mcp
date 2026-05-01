@@ -134,7 +134,7 @@ def _render_task(item, store, template: str | None, show_timeline: bool, corpus_
     vignette = cohort_item.state.vignette_for_task(item.task)
 
     resolved_template = template if template is not None else _load_template(item.task)
-    task_question = item.question.strip() or TASK_QUESTIONS.get(item.task, "")
+    task_question = TASK_QUESTIONS.get(item.task, "") or item.question.strip()
     system_prompt = resolved_template.format(
         TASK_QUESTION=task_question,
         TASK_FOCUS=TASK_DESCRIPTIONS[item.task].strip(),
