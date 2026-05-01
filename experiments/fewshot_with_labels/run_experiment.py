@@ -201,7 +201,6 @@ def _render_neighbor_block(
     *,
     context: str,
     question: str,
-    question: str,
     reason: str,
     base_generator: DeterministicTimelineLinearizationGenerator,
     n_encounters: int,
@@ -417,7 +416,6 @@ def build_prompt(
             block = _render_neighbor_block(
                 n,
                 context=context,
-                question=question,
                 question=question,
                 reason=reason,
                 base_generator=base_generator,

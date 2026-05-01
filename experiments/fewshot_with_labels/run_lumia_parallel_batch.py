@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # ── config ────────────────────────────────────────────────────────────────────
 OUT_DIR      = Path("/home/Ayeeshi/meds-mcp/experiments/fewshot_with_labels/outputs/ehrshot")
 CORPUS_DIR   = Path("/home/Ayeeshi/meds-mcp/data/ehrshot_lumia/meds_corpus")
-PATIENTS     = OUT_DIR / "patients.jsonl"
-ITEMS_FILE   = OUT_DIR / "items.jsonl"
+PATIENTS     = Path("/home/Ayeeshi/meds-mcp/data/ehrshot/patients.jsonl")
+ITEMS_FILE   = Path("/home/Ayeeshi/meds-mcp/data/ehrshot/items.jsonl")
 POOL_FILE    = OUT_DIR / "pool_test_100.json"
 MODEL        = "gemini-2.5-flash"
 PROJECT      = "som-nero-plevriti-deidbdf"
