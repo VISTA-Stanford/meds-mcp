@@ -117,7 +117,7 @@ def main() -> None:
     parser.add_argument(
         "--max-output-tokens",
         type=int,
-        default=1024,
+        default=2048,
         help=(
             "Max output tokens the summarizer may generate. Must match "
             "generation_overrides.max_tokens in the SecureLLMSummarizer "
@@ -137,6 +137,24 @@ def main() -> None:
     )
     parser.add_argument("--model", type=str, default="apim:gpt-4.1-mini")
     parser.add_argument(
+        "--vertex-project",
+        type=str,
+        default=None,
+        help="GCP project for Vertex AI inference. When set, uses Vertex AI instead of APIM.",
+    )
+    parser.add_argument(
+        "--vertex-location",
+        type=str,
+        default="us-central1",
+        help="Vertex AI region (default: us-central1).",
+    )
+    parser.add_argument(
+        "--vertex-model",
+        type=str,
+        default="gemini-2.5-flash",
+        help="Vertex AI model ID (default: gemini-2.5-flash).",
+    )
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=3,
@@ -154,7 +172,22 @@ def main() -> None:
         help="Base sleep between retries; doubles each attempt. Default 2s.",
     )
     parser.add_argument("--limit", type=int, default=None, help="Max patients to process this run")
+    parser.add_argument(
+        "--person-ids",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Restrict generation to these person_id values (space-separated). Default: all patients.",
+    )
     parser.add_argument("--force", action="store_true", help="Regenerate even if vignette exists")
+    parser.add_argument(
+        "--latest-per-patient",
+        action="store_true",
+        help=(
+            "Keep only the latest embed_time per person_id. Useful for EHRSHOT where "
+            "each patient has many timepoints but you want one representative state."
+        ),
+    )
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument(
         "--tasks",
@@ -210,6 +243,16 @@ def main() -> None:
 
     store = CohortStore.load(args.patients, args.items)
 
+    # Vertex AI inline inference — used when --vertex-project is set (no VPN required).
+    vertex_model = None
+    if args.vertex_project:
+        import vertexai
+        from vertexai.generative_models import GenerativeModel
+        vertexai.init(project=args.vertex_project, location=args.vertex_location)
+        vertex_model = GenerativeModel(args.vertex_model)
+        logger.info("Using Vertex AI model %s (project=%s, location=%s)",
+                    args.vertex_model, args.vertex_project, args.vertex_location)
+
     pipeline = PatientSimilarityPipeline(
         xml_dir=str(args.corpus_dir),
         model=args.model,
@@ -249,6 +292,10 @@ def main() -> None:
 
     todo = [store.get(pid, et) for (pid, et) in per_task_plan.keys()]
 
+    if args.person_ids is not None:
+        allowed_pids = set(args.person_ids)
+        todo = [p for p in todo if p.person_id in allowed_pids]
+
     # Only process states whose XML exists.
     missing_xml = [p for p in todo if not (args.corpus_dir / f"{p.person_id}.xml").exists()]
     todo = [p for p in todo if (args.corpus_dir / f"{p.person_id}.xml").exists()]
@@ -258,6 +305,15 @@ def main() -> None:
             len(missing_xml),
             args.corpus_dir,
         )
+
+    if args.latest_per_patient:
+        best: dict = {}
+        for p in todo:
+            et = str(p.embed_time)
+            if p.person_id not in best or et > str(best[p.person_id].embed_time):
+                best[p.person_id] = p
+        todo = list(best.values())
+        logger.info("--latest-per-patient: reduced to %d states (1 per patient)", len(todo))
 
     if args.limit is not None:
         todo = todo[: args.limit]
@@ -345,16 +401,32 @@ def main() -> None:
         shrunk = False
         for attempt in range(args.max_retries + 1):
             try:
-                return (
-                    summarizer.summarize(
+                if vertex_model is not None:
+                    from vertexai.generative_models import GenerativeModel
+                    system_prompt = summarizer.render_system_prompt(
+                        task_question, task_focus, task=task_name
+                    )
+                    _model = GenerativeModel(
+                        args.vertex_model,
+                        system_instruction=system_prompt,
+                    )
+                    response = _model.generate_content(
+                        contents=current,
+                        generation_config={
+                            "temperature": 0.2,
+                            "max_output_tokens": args.max_output_tokens,
+                            "thinking_config": {"thinking_budget": 0},
+                        },
+                    )
+                    v = response.text.strip()
+                else:
+                    v = summarizer.summarize(
                         current,
                         task=task_name,
                         task_question=task_question,
                         task_focus=task_focus,
-                    ),
-                    attempt,
-                    shrunk,
-                )
+                    )
+                return (v, attempt, shrunk)
             except Exception as e:
                 last_exc = e
                 if attempt < args.max_retries:
