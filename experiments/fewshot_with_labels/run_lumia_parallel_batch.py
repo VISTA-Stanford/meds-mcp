@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # ── config ────────────────────────────────────────────────────────────────────
 OUT_DIR      = Path("/home/Ayeeshi/meds-mcp/experiments/fewshot_with_labels/outputs/ehrshot")
-CORPUS_DIR   = Path("/home/Ayeeshi/meds-mcp/data/ehrshot_lumia/meds_corpus")
+CORPUS_DIR   = Path("/home/Ayeeshi/data/ehrshot_lumia/meds_corpus")
 PATIENTS     = Path("/home/Ayeeshi/meds-mcp/data/ehrshot/patients.jsonl")
 ITEMS_FILE   = Path("/home/Ayeeshi/meds-mcp/data/ehrshot/items.jsonl")
 POOL_FILE    = OUT_DIR / "pool_test_100.json"
@@ -257,7 +257,18 @@ def run_one(token_cap: int, store: CohortStore, pool_ids: list[str]) -> str:
 # ── main ──────────────────────────────────────────────────────────────────────
 def main() -> None:
     store = CohortStore.load(PATIENTS, ITEMS_FILE)
-    pool_ids = [str(x) for x in json.load(open(POOL_FILE))]
+    # Use all patients with test-split readmission items, not just the 100-patient pool
+    all_pids = {json.loads(l)["person_id"] for l in PATIENTS.open()}
+    pool_ids = [
+        str(pid) for pid in all_pids
+        if any(
+            it.task in TASK_FILTER and it.label != -1
+            and (s := store.get_or_none(str(pid), it.embed_time)) is not None
+            and s.split == QUERY_SPLIT
+            for it in store.items_for_patient(str(pid))
+        )
+    ]
+    logger.info("Running over %d patients with test-split readmission items", len(pool_ids))
 
     logger.info("Submitting 4 parallel Vertex batch jobs: %s",
                 " | ".join(CONTEXT_NAMES.values()))

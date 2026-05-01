@@ -68,8 +68,8 @@ def outputs_dir() -> Path:
 
 
 def patients_jsonl() -> Path:
-    return outputs_dir() / "patients.jsonl"
+    return _env_path("VISTA_PATIENTS_JSONL", outputs_dir() / "patients.jsonl")
 
 
 def items_jsonl() -> Path:
-    return outputs_dir() / "items.jsonl"
+    return _env_path("VISTA_ITEMS_JSONL", outputs_dir() / "items.jsonl")

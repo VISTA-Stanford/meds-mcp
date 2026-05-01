@@ -50,10 +50,11 @@ def main() -> None:
     parser.add_argument("--context", choices=CONTEXT_CHOICES, required=True)
     parser.add_argument("--patients", type=Path, default=_paths.patients_jsonl())
     parser.add_argument("--items", type=Path, default=_paths.items_jsonl())
-    parser.add_argument("--pool", type=Path, default=_paths.outputs_dir() / "pool_valid_100.json")
+    parser.add_argument("--pool", type=Path, default=None,
+                        help="JSON file of patient IDs to evaluate. If omitted, uses all patients with matching split/task items.")
     parser.add_argument("--corpus-dir", type=Path, default=_paths.corpus_dir())
     parser.add_argument("--output-dir", type=Path, default=_paths.outputs_dir())
-    parser.add_argument("--query-split", type=str, default="valid")
+    parser.add_argument("--query-split", type=str, default="test")
     parser.add_argument("--candidate-split", type=str, default="train")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--n", type=int, default=None)
@@ -91,8 +92,26 @@ def main() -> None:
     context = args.context
     store = CohortStore.load(args.patients, args.items)
     reason_by_key = load_reason_cache(args.reason_cache)
-    with open(args.pool, encoding="utf-8") as f:
-        pool_ids = [str(x) for x in json.load(f)]
+    if args.pool is not None:
+        with open(args.pool, encoding="utf-8") as f:
+            pool_ids = [str(x) for x in json.load(f)]
+    else:
+        tasks_filter = set(args.tasks) if args.tasks else None
+        pool_ids = [
+            json.loads(l)["person_id"]
+            for l in args.patients.open()
+        ]
+        pool_ids = [
+            str(pid) for pid in pool_ids
+            if any(
+                it.label != -1
+                and (tasks_filter is None or it.task in tasks_filter)
+                and (s := store.get_or_none(str(pid), it.embed_time)) is not None
+                and s.split == args.query_split
+                for it in store.items_for_patient(str(pid))
+            )
+        ]
+        logger.info("Derived %d patients with %s-split items from patients file", len(pool_ids), args.query_split)
     selected = pool_ids if args.n is None else pool_ids[: args.n]
 
     retriever = None

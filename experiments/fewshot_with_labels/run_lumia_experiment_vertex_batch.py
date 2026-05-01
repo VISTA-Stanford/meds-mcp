@@ -119,9 +119,10 @@ def main() -> None:
         help="Override the context label used for output filenames and result rows "
              "(e.g. 'baseline_lumia_4k'). Defaults to --context.",
     )
-    parser.add_argument("--patients", type=Path, default=_paths.outputs_dir() / "ehrshot/patients.jsonl")
-    parser.add_argument("--items", type=Path, default=_paths.outputs_dir() / "ehrshot/items.jsonl")
-    parser.add_argument("--pool", type=Path, default=_paths.outputs_dir() / "ehrshot/pool_test_100.json")
+    parser.add_argument("--patients", type=Path, default=_paths.patients_jsonl())
+    parser.add_argument("--items", type=Path, default=_paths.items_jsonl())
+    parser.add_argument("--pool", type=Path, default=None,
+                        help="JSON file of patient IDs to evaluate. If omitted, uses all patients with matching split/task items.")
     parser.add_argument("--corpus-dir", type=Path, required=True,
                         help="Directory containing per-patient {pid}.xml LUMIA files.")
     parser.add_argument("--output-dir", type=Path, default=_paths.outputs_dir() / "ehrshot")
@@ -152,8 +153,26 @@ def main() -> None:
     context_name = args.context_name or context
     store = CohortStore.load(args.patients, args.items)
 
-    with open(args.pool, encoding="utf-8") as f:
-        pool_ids = [str(x) for x in json.load(f)]
+    if args.pool is not None:
+        with open(args.pool, encoding="utf-8") as f:
+            pool_ids = [str(x) for x in json.load(f)]
+    else:
+        tasks_filter = set(args.tasks) if args.tasks else None
+        pool_ids = [
+            str(json.loads(l)["person_id"])
+            for l in args.patients.open()
+        ]
+        pool_ids = [
+            pid for pid in pool_ids
+            if any(
+                it.label != -1
+                and (tasks_filter is None or it.task in tasks_filter)
+                and (s := store.get_or_none(pid, it.embed_time)) is not None
+                and s.split == args.query_split
+                for it in store.items_for_patient(pid)
+            )
+        ]
+        logger.info("Derived %d patients with %s-split items from patients file", len(pool_ids), args.query_split)
 
     retriever = None
     if context == "lumia":
